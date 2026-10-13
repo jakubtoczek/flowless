@@ -1061,11 +1061,19 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         self.refresh_all()
         self._title()
-        threading.Thread(target=_warm, daemon=True).start()
+        self._warmer = threading.Thread(target=_warm, daemon=True)
+        self._warmer.start()
+
+    def ready(self):
+        """Wait for the warm-up before anything that plots: two threads importing
+        matplotlib at once can each get the other's half-loaded module."""
+        if getattr(self, "_warmer", None) is not None and self._warmer.is_alive():
+            self._warmer.join()
 
     # -- the tabs built when first opened
     def page(self, i):
         if self._pages[i] is None:
+            self.ready()
             if i == 1:
                 from .gating import GatingTab
                 w = GatingTab(self)
@@ -1155,6 +1163,8 @@ class MainWindow(QMainWindow):
         self._refresh_current()
 
     def _refresh_current(self):
+        if self.stale:
+            self.ready()
         i = self.tabs.currentIndex()
         w = self.page(i)
         if i in self.stale:
@@ -1201,6 +1211,7 @@ class MainWindow(QMainWindow):
 
     # -- options
     def _fill_options(self):
+        self.ready()
         m = self.options_menu
         m.clear()
         self.samples_tab.columns_menu(m.addMenu("Samples: columns shown"))
@@ -1236,6 +1247,7 @@ class MainWindow(QMainWindow):
         self.changed()
 
     def _figure_option(self, key, on):
+        self.ready()
         from . import plots
 
         vis = list(self.opts.get("figure_options") or
@@ -1255,6 +1267,7 @@ class MainWindow(QMainWindow):
         self.open_paths([Path(u.toLocalFile()) for u in e.mimeData().urls() if u.isLocalFile()])
 
     def open_paths(self, paths):
+        self.ready()
         kinds = [(p, imports.kind(p)) for p in paths]
         for p, k in kinds:
             if k == "experiment":
