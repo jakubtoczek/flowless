@@ -1,0 +1,132 @@
+# QuickFlow
+
+<img src="src/quickflow/assets/quickflow.png" width="96" align="right" alt="QuickFlow icon">
+
+Desktop GUI for **flow cytometry** fluorescence: drop the cytometer's FCS files, check the
+gates, get overlay histograms (colour or black & white), the values (geometric mean, median…)
+in a table, and a report that records how the experiment was done.
+
+Made on BD Accuri C6 Plus files; any FCS 2.0 / 3.0 / 3.1 list-mode file is read.
+
+## Install (Windows)
+
+No admin rights, no PATH or registry changes.
+
+1. Put the folder somewhere it can stay (`C:\Users\Public\QuickFlow`, or your Documents).
+2. Double-click **`QuickFlow.bat`**. The first start downloads [`uv`](https://github.com/astral-sh/uv),
+   Python and the libraries into `C:\ProgramData\PyApps` (shared with other tools set up the
+   same way) and puts a **QuickFlow** shortcut on the Desktop; later starts are quick.
+   `QuickFlow.bat private` the first time keeps everything in `C:\Users\Public\QuickFlow`
+   instead; `QUICKFLOW_RUNTIME` sets another place.
+   To pin it to the taskbar: right-click its taskbar button while it runs ▸ *Pin to taskbar*.
+
+`uninstall.bat` takes it all away again. What QuickFlow remembers (negative controls, aliases,
+recorded procedures, the columns and options shown, typed values) is in
+`quickflow_options.json` beside `QuickFlow.bat`.
+
+## Use
+
+**Drop files anywhere on the window**, or **Import…** (Ctrl+I): FCS files or whole folders, a
+saved experiment (`.json`). The kind of file is told by the file. Two other programs' files
+are read too, as well as their layout allows: a procedure sheet (`.xlsx`: steps, reagents,
+each tube's condition) and the gates of a FlowJo workspace (`.wsp`). The tabs follow the work;
+hover anything for what it does. The log at the bottom says what happened and what looks
+wrong (✗ ⚠).
+
+1. **Samples** — a row per file. *Group* is a block of the table and a panel of the figure (a
+   cell line, a treatment); *label* is a series (the stain); *role*: sample, negative control,
+   secondary only, unstained; *plot* ticks what the figure shows. They are guessed from the
+   folders and names (`MDA-MB-157 parental cells/24E8_PC.fcs` → group the folder, label 24E8;
+   `PC3-29A1.fcs` → PC3 / 29A1; "unstained", "… only" set the role; a label once marked as
+   a negative control is one again). Edit a cell with several rows selected: they all take the
+   value. Click a column's title to sort by it; right-click it (or *Options*) for the columns
+   shown. **⤢** opens everything about a sample: its fields, and what its file says (date,
+   start / end, volume, events off scale, instrument, every keyword). On the right, the selected
+   sample at a glance: its events on FSC-A × SSC-A with its gate, its histogram.
+2. **Gating** — a group's populations, each a gate on its parent: a **polygon** on two
+   channels (the dot plot) or a **range** on one (the histogram). **Drag the populations** to
+   order or nest them: the figure and the values use the one in **bold** — the first gate, and
+   the first polygon below it (cells › singlets). Drag the groups to order them. A new group
+   gets a *cells* gate automatically (the main cluster on FSC × SSC; debris, the off-scale pile
+   and a second cluster left out): check it.
+   Editing a polygon: drag a corner; click a side to add a corner; click a corner to select it,
+   **Del** deletes it; drag inside to move the gate. **+ Polygon**: click its corners (a click
+   outside the plot puts the corner on its edge: the gate then takes the events piled there,
+   off scale), then the first one again, a double-click or Enter. **+ Range** starts above 99 %
+   of the negative control's events; drag its limits. **Del** deletes the selected population,
+   F2 renames it. *events of* shows one sample; **this sample's own gate** gives it its own
+   version of the selected gate (◆ in the tree), the group's being the default. Click a plot,
+   **Ctrl+C** copies it.
+3. **Figure** — on the left, the figure's items: its panels and the legend. **+** adds a panel
+   (a copy of the selected one), drag them to order them. A panel shows one group: its
+   **histograms** (a channel, % of max or count), a **dot plot** (two channels, the gates), or
+   its **values** as bars. The legend goes below, above or right of the figure, in the grid at
+   its place in the list, in each panel, or nowhere. Select the first line for the whole
+   figure's options, a panel for its own (they override the figure's, ↺ undoes that): style,
+   fonts (titles, axis labels, ticks, legend, ranges), line width, fills; the figure's size
+   (panel width and height, the width at most — panels then go on the next row), background
+   (white or transparent), and each series' colour and dashes. **style ▸ Apply**: a set of
+   them at once (colour, black & white, offset, one column 85 mm, large for slides).
+   *Options ▸ Figure* sets which options are listed. On the right, the figure as exported:
+   wheel to zoom, drag to move, double-click to fit, **100 %** for its real size, a checker
+   behind it (shows a transparent background); click a panel to select it; **Ctrl+C** copies
+   it. **Save…** PNG / TIFF (dpi) or SVG / PDF (text stays text), **Colour + B&W…** both at once.
+4. **Results** — the figure's table (group, label, sub-population, events, value, ÷ control),
+   or every sample and population (count, % of parent, geometric mean, median, mean, CV). The
+   value and the channel measured are chosen here. **Copy** (Ctrl+C) pastes as a table in
+   Excel, Word or PowerPoint; **Export…** `.xlsx` (every sheet) or `.csv`; **Report…**.
+5. **Experiment** — what was done: title, date, operator, aim; each group's cells (cell line,
+   transfection, treatment, detachment); the reagents (kind, target, fluorochrome, supplier,
+   catalog #, lot, MW, stock, per tube, dilution) and how each reads (*Anti his PE* → a
+   PE-labelled anti-His-tag secondary antibody); the procedure, one step per line (record it
+   to reuse it); the acquisition and the instrument as the files describe them. ⤢ opens a
+   group or a reagent whole. The MIFlowCyt list says what a report of this experiment holds and
+   what is missing.
+
+**▤ Aliases…**: what the figure, the tables and the report call the groups, labels, samples,
+channels and populations (*FL2-A :: PE-A* → *anti-His PE*); remembered for the next
+experiments with the same names.
+
+**Options ▾**: the sample columns shown; the channels offered (by default FSC-A, SSC-A and the
+areas of the fluorochromes the reagents name — heights and other detectors hidden; a channel a
+gate is on is always offered); the figure options listed.
+
+**Report… (Ctrl+P)**: tick the sections, drag them in order, then PDF, HTML or Excel.
+
+**Ctrl+S** saves the experiment as one `.json` (the files are found again from where it is, if
+the folder moves with them); **Ctrl+Z / Ctrl+Y** undo, redo.
+
+The version is in the window title and on every report.
+
+## How the numbers are made
+
+- **Gates**: a polygon holds an event inside it (the channels' raw values); a range holds
+  low ≤ value < high. Events at the top of a channel's scale (an Accuri's FSC-A saturates for
+  big cells: up to 56 % of the events in the example runs; FSC-H never does) sit on the plot's
+  edge: a gate drawn to that edge takes them.
+- **Geometric mean**: exp(mean(ln x)) of the positive values. Median, mean and CV of all of
+  them.
+- **÷ control**: the value over the group's negative control's (else the secondary-only,
+  else the unstained), its main population.
+- **Histograms**: 256 channels over the log scale, smoothed over a few channels when
+  *smoothed* is ticked; *% of max* (the default, "normalised to mode") scales each to its own
+  peak, so samples with different event numbers compare — the table gives the events.
+
+Checked against FlowJo on the example runs: events per gate within 1.1 %, geometric means
+within 0.2 %. FlowJo is a trademark of Becton, Dickinson and Company; QuickFlow only reads
+the gates in its workspace files and is not affiliated with it.
+
+## Dev
+
+```
+uv run python -m quickflow                          # launch
+uv run python -m quickflow.model --self-check       # gates and values against the references
+uv run python -m quickflow.record                   # reagent names read
+uv run python misc/smoke_test.py [--shots DIR]      # the whole window, driven without a screen
+uv run python -m quickflow.fcs FILE.fcs             # a file's keywords and channels
+uv run python -m quickflow.imports.sheet SHEET.xlsx # what a procedure sheet gives
+uv run python misc/bump.py                          # stamp today's date as the version
+```
+
+The checks read the example data kept beside this folder (`../data/data`); another folder can
+be given at the end of the command.

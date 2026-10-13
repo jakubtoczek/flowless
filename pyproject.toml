@@ -1,0 +1,24 @@
+[project]
+name = "quickflow"
+dynamic = ["version"]
+description = "QuickFlow — flow cytometry (FCS) fluorescence analysis: gates, overlay histograms, values, reports"
+requires-python = ">=3.11"
+dependencies = [
+    "PySide6-Essentials>=6.6",
+    "numpy>=1.26",
+    "matplotlib>=3.8",
+    "openpyxl>=3.1",
+]
+
+[project.scripts]
+quickflow = "quickflow.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/quickflow"]
+
+[tool.hatch.version]
+path = "src/quickflow/__init__.py"
