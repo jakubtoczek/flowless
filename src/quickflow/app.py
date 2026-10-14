@@ -577,10 +577,12 @@ class ResultsTab(QWidget):
 
         exp = self.win.exp
         if self.mode.currentIndex() == 0:
-            heads = ["group", "label", "sub-population", "events", exp.stat, "÷ control"]
+            heads = ["group", "label", "sub-population", "events", "% parent", exp.stat,
+                     "÷ control"]
             return heads, [[exp.name("group", r["group"]), exp.name("label", r["label"]),
                             exp.name("population", r["sub-population"]) or "—", r["count"],
-                            r["value"], r["÷ control"]] for r in report.summary_rows(exp)]
+                            r["% parent"], r["value"], r["÷ control"]]
+                           for r in report.summary_rows(exp)]
         heads = ["group", "label", "role", "sample", "population", "count", "% parent",
                  "geometric mean", "median", "mean", "CV %", "÷ control"]
         named = {"group", "label", "sample", "population"}
@@ -1080,6 +1082,8 @@ class OptionsDialog(QDialog):
                   [o["key"] for o in plots.OPTIONS if o["shown"]])
         boxes = {}
         for o in plots.OPTIONS:
+            if o["bar"]:                      # set over the layout's boxes, always there
+                continue
             if o["section"] not in boxes:
                 boxes[o["section"]] = QVBoxLayout(box := QGroupBox(o["section"]))
                 v.addWidget(box)
@@ -1259,8 +1263,9 @@ class MainWindow(QMainWindow):
                 ("Save", QKeySequence.Save, "the experiment as one .json", self.save),
                 ("Save as…", QKeySequence.SaveAs, "", self.save_as),
                 (None, None, None, None),
-                ("Import…", "Ctrl+I", "FCS files or a folder of them, an experiment — the kind "
-                                      "is told by the file", self.import_dialog),
+                ("Import…", "Ctrl+I", "FCS files or a folder of them, an experiment, gates "
+                                      "(Gating-ML) — the kind is told by the file",
+             self.import_dialog),
                 (None, None, None, None),
                 ("Report…", "Ctrl+P", "PDF, HTML or Excel", self.report)]:
             if text is None:
@@ -1491,8 +1496,8 @@ class MainWindow(QMainWindow):
         if fcs_like:
             self.add_files(fcs_like)
         for p, k in kinds:
-            if k == "gates":
-                self.import_wsp(p)
+            if k in ("gates", "gatingml"):
+                self.import_gates(p, k)
             elif k == "sheet":
                 self.import_procedure(p)
             elif not k:
@@ -1544,15 +1549,16 @@ class MainWindow(QMainWindow):
         self.log(*[f"✗ {b}" for b in bad])
         self.changed()
 
-    def import_wsp(self, p):
-        from .imports import flowjo
+    def import_gates(self, p, kind="gatingml"):
+        from .imports import flowjo, gatingml
 
         if not self.exp.samples:
-            self.log("✗ workspace gates: add its FCS files first, then drop it again")
+            self.log(f"✗ {p.name}: add the FCS files first, then the gates")
             return
         self.snap()
         try:
-            self.log(f"Gates of {p.name}:", *flowjo.apply(self.exp, p))
+            self.log(f"Gates of {p.name}:",
+                     *(gatingml if kind == "gatingml" else flowjo).apply(self.exp, p))
         except Exception as e:
             self.undo.pop()
             self.log(f"✗ {p.name}: {e}")
@@ -1592,7 +1598,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.log(f"✗ {p.name}: {e}")
             return
-        exp.record = record.clean(exp.record)
+        exp.record = record.clean(exp.record, exp.labels())
         self.exp = exp
         self._known_aliases()
         self.undo.clear()

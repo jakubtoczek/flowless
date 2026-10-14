@@ -14,8 +14,9 @@ from matplotlib.path import Path as Poly
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox,
-                               QFileDialog, QHBoxLayout, QLabel, QListWidget, QMenu, QPushButton, QSplitter,
-                               QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
+                               QFileDialog, QHBoxLayout, QLabel, QListWidget, QMenu,
+                               QPushButton, QSplitter, QToolButton, QTreeWidget,
+                               QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from . import model, plots
 from .canvas import PlotCanvas
@@ -329,11 +330,14 @@ class GatingTab(QWidget):
         self.tree.itemSelectionChanged.connect(self._pop_changed)
         self.tree.itemChanged.connect(self._renamed)
         self.tree.moved.connect(self._tree_moved)
+        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._tree_menu)
         self.tree.setToolTip(
             "Each population is a gate on the one above it. Drag to reorder or nest them: "
             "the figure and the values use the population in bold — the first gate, and "
-            "the first polygon below it. F2 or double-click renames, Del deletes, Ctrl+C "
-            "copies the table. ◆: some samples have their own version of the gate.")
+            "the first polygon below it (right-click: show another one). F2 or "
+            "double-click renames, Del deletes, Ctrl+C copies the table. ◆: some samples "
+            "have their own version of the gate.")
         for key, fn in ((QKeySequence.Delete, self.delete), (QKeySequence.Copy, self.copy_tree)):
             self.tree.addAction(QAction(self.tree, shortcut=key, triggered=fn,
                                         shortcutContext=Qt.WidgetShortcut))
@@ -520,7 +524,7 @@ class GatingTab(QWidget):
         root.setFlags(root.flags() & ~Qt.ItemIsDragEnabled)
         self.tree.addTopLevelItem(root)
         nodes = {model.ALL: root}
-        main = exp.main_population(self.group)
+        main = plots.measured(exp, self.group)
         chain = set()
         p = main
         while p and p != model.ALL:
@@ -554,29 +558,45 @@ class GatingTab(QWidget):
         self.tree.blockSignals(False)
         self._sync_own()
         warn = []
-        for top, names in exp.stray_ranges(self.group).items():
+        for top, names in exp.stray_ranges(self.group, main).items():
             them = ", ".join(names)
             warn.append(f"⚠ {html.escape(them)}: under {html.escape(top or model.ALL)}, not "
-                        f"under {html.escape(main)} (bold) — the figure and the values leave "
+                        f"under {html.escape(main)} (bold) — the figure and the summary leave "
                         f"{'it' if len(names) == 1 else 'them'} out.")
             if top and top not in chain:
                 i = [g.name for g in self.gates()].index(top)
-                warn[-1] += (f' <a href="{i}" style="color:#4a9782">Use '
-                             f"{html.escape(top)}</a> (puts it first).")
+                warn[-1] += (f' <a href="{i}" style="color:#4a9782">Show '
+                             f"{html.escape(top)}</a> in the figure instead.")
         self.warn.setText("<br>".join(warn))
         self.warn.setVisible(bool(warn))
 
     def _use(self, i):
-        """Gate *i* (a link's text) first among the group's: the population the figure
-        uses."""
-        gs = self.gates()
-        g = gs[int(i)]
-        name = g.name
+        """Gate *i* (a link's text, or the tree's menu) shown by the group's histogram and
+        bars panels: the figure, and the summary that measures what it shows."""
+        name = self.gates()[int(i)].name
+        exp = self.win.exp
         self.win.snap()
-        gs.remove(g)
-        gs.insert(0, g)
+        own = plots.panels(exp)
+        exp.figure["panels"] = own
+        for p in own:
+            if p.get("group") == self.group and p.get("kind") in ("histogram", "bars"):
+                p["population"] = name
         self.win.changed()
-        self.win.log(f"✓ {self.group}: the figure and the values use {name} now")
+        self.win.log(f"✓ {self.group}: the figure and the summary show {name} now")
+
+    def _tree_menu(self, pos):
+        it = self.tree.itemAt(pos)
+        name = it.data(0, Qt.UserRole) if it else None
+        if not name:
+            return
+        m = QMenu(self)
+        i = [g.name for g in self.gates()].index(name)
+        a = m.addAction(f"Show {name} in the figure (the summary measures it)")
+        a.setEnabled(name != plots.measured(self.win.exp, self.group))
+        a.triggered.connect(lambda: self._use(i))
+        m.addAction("Rename (F2)").triggered.connect(lambda: self.tree.editItem(it, 0))
+        m.addAction("Delete (Del)").triggered.connect(self.delete)
+        m.exec(self.tree.viewport().mapToGlobal(pos))
 
     def _sync_own(self):
         s, g = self.one(), self.gate()

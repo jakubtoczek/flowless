@@ -74,21 +74,29 @@ def files_table(exp: model.Experiment) -> tuple[str, list[list[str]]]:
 
 
 def summary_rows(exp: model.Experiment, rows: list[dict] | None = None) -> list[dict]:
-    """The table of the figure: group, label, sub-population ('' for the main one), its
-    events, the chosen statistic, ÷ control. The main population and every one below it;
-    unplotted samples left out."""
+    """The table of the figure: group, label, sub-population ('' for the one shown), its
+    events, the chosen statistic, ÷ control (over the control's value in the population
+    shown). The population each group's figure shows (plots.measured) and every one below
+    it; unplotted samples left out."""
     rows = rows if rows is not None else exp.results()
     plotted = {(s.group, s.name) for s in exp.samples if s.plot}
+    shown = {g: plots.measured(exp, g) for g in exp.groups()}
+    ctrl = {}
+    for g in exp.groups():
+        c = exp.control(g)
+        ctrl[g] = next((r[exp.stat] for r in rows if c is not None and r["sample"] == c.name
+                        and r["group"] == g and r["population"] == shown[g]), None)
     out = []
     for r in rows:
-        if (r["group"], r["sample"]) not in plotted:
+        g, pop = r["group"], shown[r["group"]]
+        if (g, r["sample"]) not in plotted:
             continue
-        main = exp.main_population(r["group"])
-        if r["population"] == main or r["population"] in exp.below(r["group"], main):
-            out.append({"group": r["group"], "label": r["label"],
-                        "sub-population": "" if r["population"] == main else r["population"],
-                        "count": r["count"], "value": r[exp.stat],
-                        "÷ control": r["÷ control"], "role": r["role"]})
+        if r["population"] == pop or r["population"] in exp.below(g, pop):
+            c, v = ctrl.get(g), r[exp.stat]
+            out.append({"group": g, "label": r["label"],
+                        "sub-population": "" if r["population"] == pop else r["population"],
+                        "count": r["count"], "% parent": r["% parent"], "value": v,
+                        "÷ control": v / c if c and v is not None else None, "role": r["role"]})
     return out
 
 
@@ -144,11 +152,12 @@ def build(exp: model.Experiment, sections=None, full_table: bool = False) -> tup
         elif key == "results":
             parts.append(f"<h2>{name}</h2>")
             sr = summary_rows(exp, rows)
-            parts.append(table(["group", "label", "sub-population", "events", exp.stat,
-                                "÷ control"],
+            parts.append(table(["group", "label", "sub-population", "events", "% parent",
+                                exp.stat, "÷ control"],
                                [[N("group", r["group"]), N("label", r["label"]),
                                  N("population", r["sub-population"]) or "—", num(r["count"]),
-                                 num(r["value"]), num(r["÷ control"], 2)] for r in sr]))
+                                 num(r["% parent"], 1), num(r["value"]),
+                                 num(r["÷ control"], 2)] for r in sr]))
             if full_table:
                 parts.append("<h3>Every sample and population</h3>")
                 parts.append(table(
@@ -243,9 +252,12 @@ def _figure_legend(exp) -> str:
 
 
 def stat_note(exp) -> str:
+    shown = ", ".join(dict.fromkeys(exp.name("population", plots.measured(exp, g))
+                                    for g in exp.groups()))
     return (f"{exp.stat.capitalize()} of {exp.name('channel', exp.marker)} in each population "
-            "(geometric mean: of the positive values). ÷ control: over the group's "
-            "negative control (else secondary-only, else unstained), main population.")
+            "(geometric mean: of the positive values); the summary: the population each "
+            f"group's figure shows ({shown}) and those below it. ÷ control: over the group's "
+            "negative control (else secondary-only, else unstained) in that population.")
 
 
 def _page(title, body) -> str:
@@ -297,11 +309,11 @@ def save_xlsx(exp: model.Experiment, path) -> None:
     rows = exp.results()
     ws = wb.active
     ws.title = "Summary"
-    sheet("Summary", ["group", "label", "role", "sub-population", "events", exp.stat,
-                      "÷ control"],
+    sheet("Summary", ["group", "label", "role", "sub-population", "events", "% parent",
+                      exp.stat, "÷ control"],
           [[N("group", r["group"]), N("label", r["label"]), r["role"],
-            N("population", r["sub-population"]), r["count"], r["value"], r["÷ control"]]
-           for r in summary_rows(exp, rows)], ws)
+            N("population", r["sub-population"]), r["count"], r["% parent"], r["value"],
+            r["÷ control"]] for r in summary_rows(exp, rows)], ws)
     heads = ["group", "label", "role", "sample", "population", "parent", "count", "% parent",
              "geometric mean", "median", "mean", "CV %", "÷ control", "own gate"]
     sheet("Results", heads, [[N(h, r[h]) if h in ("group", "label", "sample", "population")

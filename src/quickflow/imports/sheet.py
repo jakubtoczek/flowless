@@ -89,7 +89,7 @@ def read(path) -> dict:
                 for k, nm in names.items():
                     if any(x["name"] == nm for x in reagents):
                         continue
-                    reagents.append({"name": nm, "kind": "primary",
+                    reagents.append({"name": nm, "kind": "sample",     # what is tested
                                      "MW (Da)": _txt(grid.get((r, k), "")),
                                      "stock (mg/mL)": _txt(grid.get((conc, k), "")) if conc else ""})
         # reagent lines right of the conditions: name | catalog | supplier | dilution, or
@@ -123,7 +123,7 @@ def read(path) -> dict:
     for r in [r for r in reagents if r["name"].lower() in words and "kind" not in r]:
         reagents.remove(r)
         for p in reagents:
-            if p.get("kind") == "primary" and not p.get("per tube"):
+            if p.get("kind") in record.BINDERS and not p.get("per tube"):
                 p["per tube"] = r.get("per tube", "")
     for r in reagents:
         r.setdefault("kind", "secondary" if re.search(r"anti|2nd|second", r["name"], re.I)

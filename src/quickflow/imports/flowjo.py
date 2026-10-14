@@ -12,42 +12,12 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-GATING = "{http://www.isac-net.org/std/Gating-ML/v2.0/gating}"
-DATATYPES = "{http://www.isac-net.org/std/Gating-ML/v2.0/datatypes}"
-
-
-def _tag(e) -> str:
-    return e.tag.rsplit("}", 1)[-1]
+from . import gatingml
 
 
 def _gate(pop) -> dict | None:
     g = pop.find("Gate")
-    if g is None or not len(g):
-        return None
-    shape = g[0]
-    dims = [d.get(f"{DATATYPES}name") for d in shape.iter() if _tag(d) == "fcs-dimension"]
-    kind = _tag(shape)
-    if kind == "PolygonGate" and len(dims) == 2:
-        verts = [[float(c.get(f"{DATATYPES}value")) for c in v if _tag(c) == "coordinate"]
-                 for v in shape if _tag(v) == "vertex"]
-        return {"kind": "polygon", "x": dims[0], "y": dims[1], "vertices": verts}
-    if kind == "RectangleGate":
-        lims = []
-        for d in shape:
-            if _tag(d) != "dimension":
-                continue
-            lo, hi = d.get(f"{GATING}min"), d.get(f"{GATING}max")
-            lims.append((float(lo) if lo else None, float(hi) if hi else None))
-        if len(dims) == 1:
-            return {"kind": "range", "x": dims[0], "lo": lims[0][0], "hi": lims[0][1]}
-        if len(dims) == 2:                               # a rectangle is a 4-vertex polygon
-            (x0, x1), (y0, y1) = lims
-            big = 1e12
-            x0, y0 = (x0 if x0 is not None else -big), (y0 if y0 is not None else -big)
-            x1, y1 = (x1 if x1 is not None else big), (y1 if y1 is not None else big)
-            return {"kind": "polygon", "x": dims[0], "y": dims[1],
-                    "vertices": [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]}
-    return None
+    return gatingml.shape(g[0]) if g is not None and len(g) else None
 
 
 def _walk(node, parent: str, out: list, skipped: list) -> None:

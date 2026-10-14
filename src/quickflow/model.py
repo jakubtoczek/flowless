@@ -256,10 +256,10 @@ class Experiment:
             out += [g.name] + self.below(group, g.name)
         return out
 
-    def stray_ranges(self, group: str) -> dict[str, list[str]]:
-        """The ranges the figure and the values leave out (not below the main population),
-        by the top gate they hang from ("" : on all events)."""
-        used = set(self.below(group, self.main_population(group)))
+    def stray_ranges(self, group: str, pop: str = "") -> dict[str, list[str]]:
+        """The ranges not below *pop* (default: the main population) - what a figure of it
+        leaves out -, by the top gate they hang from ("" : on all events)."""
+        used = set(self.below(group, pop or self.main_population(group)))
         by = {g.name: g for g in self.gates.get(group, [])}
         out = {}
         for g in by.values():
@@ -361,6 +361,7 @@ class Experiment:
                 cands.append(base / Path(sd["path"]).name)
             p = next((c for c in cands if c.is_file()), None)
             known = {k: sd[k] for k in Sample.__dataclass_fields__ if k in sd}
+            known["fields"] = {OLD_FIELDS.get(k, k): v for k, v in known.get("fields", {}).items()}
             known["gates"] = {k: _gate(v) for k, v in known.get("gates", {}).items()}
             if p is None:
                 problems.append(f"{Path(sd['path']).name}: not found (left out)")
@@ -383,6 +384,10 @@ class Experiment:
         if "quickflow" not in d:
             raise ValueError(f"{Path(path).name}: not a QuickFlow experiment")
         return cls.from_dict(d, str(Path(path).resolve()))
+
+
+OLD_FIELDS = {"VHH, µL": "primary µL", "Anti-VHH, µL": "secondary µL", "VHH": "primary",
+              "Anti-VHH": "secondary"}       # the first version's names, from the sheets
 
 
 def _gate(d) -> Gate:
@@ -681,6 +686,7 @@ def self_check(data: Path) -> int:
     assert e.main_population("g") == "singlets" and e.below("g", "cells") == ["singlets", "high"]
     e2 = Experiment(gates={"g": [Gate("cells"), Gate("gate 1"), Gate("high", "gate 1", "range")]})
     assert e2.stray_ranges("g") == {"gate 1": ["high"]}, e2.stray_ranges("g")
+    assert e2.stray_ranges("g", "gate 1") == {}
     # two clusters: the gate holds the big one, not half of the small one
     rng = np.random.default_rng(1)
     big = rng.normal([1.0e7, 2.0e6], [1.6e6, 5e5], (20000, 2))

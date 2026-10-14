@@ -27,7 +27,8 @@ recorded procedures, the columns and options shown, typed values) is in
 ## Use
 
 **Drop files anywhere on the window**, or **Import…** (Ctrl+I): FCS files or whole folders, a
-saved experiment (`.json`). The kind of file is told by the file. The tabs follow the work;
+saved experiment (`.json`), gates (Gating-ML 2.0 `.xml`, the standard for gates). The kind of
+file is told by the file. The tabs follow the work;
 hover anything for what it does. The log at the bottom says what happened and what looks
 wrong (✗ ⚠).
 
@@ -48,10 +49,13 @@ wrong (✗ ⚠).
    gets a *cells (auto)* gate (the main cluster on FSC × SSC; debris, the off-scale pile and a
    second cluster left out): check it. **Auto gate** redraws the selected polygon that way;
    with *All events* selected it adds a *cells (auto)* gate beside the others. A ⚠ under the
-   tree says when ranges hang from a population the figure doesn't use, with a link that
-   puts it first. The histogram's y axis: count (the default), % of max, or % of events
-   (each histogram's area 100 %). **Export…** writes every group's gates as a Gating-ML 2.0
-   file, the standard most flow cytometry software reads.
+   tree says when ranges hang from a population the figure doesn't show, with a link that
+   shows it instead (or right-click a population: *Show … in the figure*). The histogram's
+   y axis: count (the default), % of max, or % of events (each histogram's area 100 %).
+   **Export…** writes every group's gates as a Gating-ML 2.0 file, the standard most flow
+   cytometry software reads; dropping such a file brings them back (a file from another
+   program: its gates go to every group; gates on a transformed scale are not read, the log
+   names them).
    Editing a polygon: drag a corner; click a side to add a corner; click a corner to select it,
    **Del** deletes it; drag inside to move the gate. **+ Polygon**: click its corners (a click
    outside the plot puts the corner on its edge: the gate then takes the events piled there,
@@ -71,19 +75,25 @@ wrong (✗ ⚠).
    (panel width and height, the width at most — panels then go on the next row), background
    (white or transparent), and each series' colour and dashes. **style ▸ Apply**: a set of
    them at once (colour, black & white, offset, one column 85 mm, large for slides).
-   *Options ▸ Figure options* sets which options are listed. In the middle, the layout as
-   boxes: click one to select it, drag a panel onto another's place, the legend above, below,
-   right of the figure or into the grid. On the right, the figure as exported:
+   *Options ▸ Figure options* sets which options are listed. In the middle, the **layout** as
+   boxes, its size above them (panel width × height, columns, the width at most, the legend's
+   place): click a box to select it; drag it and a bar shows where it goes — between two
+   panels, at the end of a row, a new row above or below (so 3 + 1 becomes 2 × 2 by dragging
+   one panel down); the legend also above, below or right of the figure, or into a free place
+   in the grid. **+** adds a panel; right-click a box for its menu. On the right, the figure
+   as exported:
    wheel to zoom, drag to move, double-click to fit, **100 %** for its real size, a checker
    behind it (shows a transparent background), **res** 1–5× (the panels larger, the text as
    set; *export* ticked: the exports too); click a panel to select it; **Ctrl+C** copies
    it. **Save…** PNG / TIFF (dpi) or SVG / PDF (text stays text), **Colour + B&W…** both at once.
-4. **Results** — the figure's table (group, label, sub-population, events, value, ÷ control),
+4. **Results** — the figure's table (group, label, sub-population, events, % of parent, value,
+   ÷ control: each group's population the figure shows, and the ranges below it),
    or every sample and population (count, % of parent, geometric mean, median, mean, CV). The
    value and the channel measured are chosen here. **Copy** (Ctrl+C) pastes as a table in
    Excel, Word or PowerPoint; **Export…** `.xlsx` (every sheet) or `.csv`; **Report…**.
 5. **Experiment** — what was done: title, date, operator, aim; each group's cells (cell line,
-   transfection, treatment, detachment); the reagents (kind, target, fluorochrome, supplier,
+   transfection, treatment, detachment); the reagents (kind — *sample* for what is tested, as
+   the sdAbs: in the tube it is the primary —, target, fluorochrome, supplier,
    catalog #, lot, MW, stock, per tube, dilution) and how each reads (*Anti his PE* → a
    PE-labelled anti-His-tag secondary antibody); the procedure, one step per line (record it
    to reuse it); the acquisition and the instrument as the files describe them. ⤢ opens a
@@ -139,6 +149,7 @@ uv run python -m quickflow.record                   # reagent names read
 uv run python misc/smoke_test.py [--shots DIR]      # the whole window, driven without a screen
 uv run python -m quickflow.fcs FILE.fcs             # a file's keywords and channels
 uv run python -m quickflow.imports.sheet SHEET.xlsx # what a procedure sheet gives
+uv run python -m quickflow.imports.gatingml F.xml  # the gates a Gating-ML file gives
 uv run python misc/bump.py                          # stamp today's date as the version
 ```
 

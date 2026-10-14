@@ -15,7 +15,11 @@ SAMPLE_FIELDS = ["condition", "primary", "primary µL", "secondary", "secondary 
                  "note"]
 REAGENT_FIELDS = ["name", "kind", "target", "fluorochrome", "supplier", "catalog #", "lot",
                   "MW (Da)", "stock (mg/mL)", "per tube", "dilution"]
-REAGENT_KINDS = ["primary", "secondary", "viability dye", "isotype control", "buffer", "other"]
+# sample: what the experiment tests (an sdAb, an antibody under study) - in the tube it is
+# the primary (the secondary detects it); in the record it needs its amount, not a catalog #
+REAGENT_KINDS = ["sample", "primary", "secondary", "viability dye", "isotype control", "buffer",
+                 "other"]
+BINDERS = ("sample", "primary")               # what a secondary detects
 HINT = {"title": "what this experiment is", "date": "taken from the files when empty",
         "operator": "who did it", "project": "grant, study…",
         "aim": "the question it answers (MIFlowCyt 1.1)", "comment": "anything else",
@@ -34,8 +38,9 @@ def empty() -> dict:
             "procedure": []}
 
 
-def clean(rec: dict | None) -> dict:
-    """A record read back from a file: what's missing takes its default."""
+def clean(rec: dict | None, labels=()) -> dict:
+    """A record read back from a file: what's missing takes its default. A 'primary' named
+    as one of the *labels* (the series) is what is tested: kind 'sample'."""
     out = empty()
     rec = rec if isinstance(rec, dict) else {}
     out["general"].update({k: str(v) for k, v in rec.get("general", {}).items()})
@@ -44,6 +49,9 @@ def clean(rec: dict | None) -> dict:
     out["reagents"] = [{k: str(r.get(k, "")) for k in REAGENT_FIELDS}
                        for r in rec.get("reagents", []) if isinstance(r, dict)]
     out["procedure"] = [str(x) for x in rec.get("procedure", []) if str(x).strip()]
+    for r in out["reagents"]:
+        if r["kind"] == "primary" and r["name"] in labels:
+            r["kind"] = "sample"
     return out
 
 
@@ -163,8 +171,14 @@ def miflowcyt(rec: dict, samples, gates: dict) -> list[tuple[str, bool, str]]:
          bool(reag) and all(r.get("name") for r in reag),
          "Experiment › reagents"),
         ("2.4 reagents: manufacturer, catalog #",
-         bool(reag) and any(r.get("supplier") and r.get("catalog #") for r in reag),
-         "Experiment › reagents"),
+         any(r.get("supplier") and r.get("catalog #") for r in reag) and
+         all(r.get("supplier") and r.get("catalog #") for r in reag
+             if r.get("kind") in ("primary", "secondary", "viability dye", "isotype control")),
+         "Experiment › reagents (the bought ones)"),
+        ("2.4 reagents tested: amount per tube",
+         all(r.get("per tube") or r.get("stock (mg/mL)") for r in reag
+             if r.get("kind") == "sample"),
+         "Experiment › reagents › per tube (kind: sample)"),
         ("3 instrument (model, lasers, filters)", True, "from the files"),
         ("4.1 list-mode data files", True, "the files"),
         ("4.2 compensation", True, "from the files"),
@@ -178,5 +192,7 @@ if __name__ == "__main__":
     assert describe({"name": "Anti his PE", "kind": "secondary"}) == \
         "PE-labelled anti-His-tag secondary antibody", describe({"name": "Anti his PE"})
     assert parse_reagent("29A1") == {} and fcs.fluor_of("PE-A") == "PE"
+    assert clean({"reagents": [{"name": "29A1", "kind": "primary"}]}, ["29A1"]
+                 )["reagents"][0]["kind"] == "sample"
     assert fluorochromes({"reagents": [{"name": "anti-his PE"}, {"name": "24E8"}]}) == {"PE"}
     print("record self-check OK")

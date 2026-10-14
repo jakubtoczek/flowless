@@ -7,16 +7,17 @@ right the figure itself, as it is exported. Widgets only: the figure is plots.fi
 from __future__ import annotations
 
 import copy
+import math
 import time
 from pathlib import Path
 
 from PySide6.QtCore import QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QKeySequence, QPainter, QPen
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QColorDialog, QComboBox,
-                               QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox,
-                               QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-                               QPushButton, QScrollArea, QSlider, QSpinBox, QSplitter,
-                               QToolButton, QVBoxLayout, QWidget)
+                               QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout,
+                               QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+                               QListWidgetItem, QMenu, QPushButton, QScrollArea, QSlider,
+                               QSpinBox, QSplitter, QToolButton, QVBoxLayout, QWidget)
 
 from . import plots
 from .app import guard_wheel
@@ -25,119 +26,229 @@ from .gating import GroupList
 
 FIGURE = "▣  The figure — every panel"
 ACCENT = "#4a9782"
+MARK = QColor("#6fb0ff")                   # where a dragged box goes
 
 
 class Schematic(QWidget):
-    """The figure's layout as boxes, in its proportions: click one to select it (outside
-    them: the whole figure), drag a panel onto another's place, the legend above, below or
-    right of the figure or into the grid. Del removes the selected panel."""
+    """The figure's layout as boxes, in its proportions (from the render, so they can't
+    disagree with it). Click a box to select it (elsewhere: the whole figure), right-click
+    for its menu, + adds a panel. Drag a box: a bar shows where it goes - between two
+    panels, at the end of a row, or a new row (above the first, below the last); the legend
+    also above, below or right of the figure. A full row takes nothing more."""
 
     picked = Signal(int)                 # an index in panels(); -1: the figure
-    moved = Signal(int, int)             # item, onto item's place
-    legend = Signal(str, int)            # place, item whose place it takes (grid) or -1
-    M = 30                               # px around the figure: the legend's drop zones
+    arranged = Signal(object, str, int)  # the grid's items row by row, the legend's place
+    #                                      ('' : as it was), the item moved
+    add = Signal()
+    menu = Signal(int, object)           # item, global position
+    M = 26                               # px around the figure: the legend's drop zones
 
     def __init__(self):
         super().__init__()
-        self.cells, self.texts, self.size_mm = [], {}, (1.0, 1.0)
+        self.items, self.grid, self.texts = {}, {}, {}
+        self.rows = self.per_row = 0
+        self.cell, self.origin, self.size_mm = (60.0, 50.0), (0.0, 0.0), (1.0, 1.0)
         self.legend_i, self.place, self.sel = None, "bottom", -1
         self.press = self.drag = None
         self.setMinimumSize(180, 160)
         self.setFocusPolicy(Qt.StrongFocus)
 
-    def set_layout(self, cells, texts, size_mm, legend_i, place, sel):
-        self.cells, self.texts, self.size_mm = list(cells), texts, size_mm
-        self.legend_i, self.place, self.sel = legend_i, place, sel
+    def set_layout(self, fig, texts, legend_i, place, sel):
+        W, H = (v * 25.4 for v in fig.get_size_inches())
+        self.size_mm = (W, H)
+        self.items = {i: (x0 * W, (1 - y1) * H, (x1 - x0) * W, (y1 - y0) * H)
+                      for i, (x0, y0, x1, y1) in getattr(fig, "quickflow_cells", [])}
+        g = getattr(fig, "quickflow_grid", {})
+        self.grid = dict(g.get("places", {}))
+        self.rows, self.per_row = g.get("rows", 0), g.get("per_row", 1)
+        cells = [self.items[i] for i in self.grid if i in self.items]
+        if cells:
+            self.cell = cells[0][2:]
+            self.origin = (min(c[0] for c in cells), min(c[1] for c in cells))
+        else:
+            self.rows, self.origin = 0, (0.0, 0.0)
+        self.texts, self.legend_i, self.place, self.sel = texts, legend_i, place, sel
         self.update()
 
-    def _frame(self) -> QRectF:
-        m, (W, H) = self.M, self.size_mm
-        a = QRectF(self.rect()).adjusted(m, m, -m, -m - 26)       # 26: the legend chip
-        k = min(a.width() / max(W, 1), a.height() / max(H, 1))
-        return QRectF(a.center().x() - W * k / 2, a.center().y() - H * k / 2, W * k, H * k)
+    # -- geometry: mm (the figure's, top-down) to px
+    def _row(self, r) -> list[int]:
+        return [i for i, _ in sorted(((i, rc) for i, rc in self.grid.items() if rc[0] == r),
+                                     key=lambda t: t[1][1])]
 
-    def _boxes(self) -> list[tuple[int, QRectF]]:
-        f = self._frame()
-        out = [(i, QRectF(f.left() + x0 * f.width(), f.top() + (1 - y1) * f.height(),
-                          (x1 - x0) * f.width(), (y1 - y0) * f.height()).adjusted(2, 2, -2, -2))
-               for i, (x0, y0, x1, y1) in self.cells]
-        for _, r in out:                     # a legend band above / below: readable
-            if r.height() < 18:
-                if r.center().y() < f.center().y():
-                    r.setTop(r.bottom() - 18)
+    def _ghost(self) -> tuple[float, float, float, float] | None:
+        """The '+' box: the next place a panel goes."""
+        if not self.rows:
+            return (0.0, 0.0, *self.cell)
+        last = self._row(self.rows - 1)
+        r, c = (self.rows - 1, len(last)) if len(last) < self.per_row else (self.rows, 0)
+        return (self.origin[0] + c * self.cell[0], self.origin[1] + r * self.cell[1], *self.cell)
+
+    def _scale(self):
+        W, H = self.size_mm
+        g = self._ghost()
+        x1, y1 = max(W, g[0] + g[2]), max(H, g[1] + g[3])
+        m = self.M
+        k = min((self.width() - 2 * m) / max(x1, 1), (self.height() - 2 * m - 24) / max(y1, 1))
+        return k, (self.width() - x1 * k) / 2, m + max(0.0, (self.height() - 2 * m - 24 - y1 * k) / 2)
+
+    def _px(self, x, y, w, h) -> QRectF:
+        k, ox, oy = self._scale()
+        return QRectF(ox + x * k, oy + y * k, w * k, h * k)
+
+    def _mm(self, pos) -> tuple[float, float]:
+        k, ox, oy = self._scale()
+        return (pos.x() - ox) / k, (pos.y() - oy) / k
+
+    def _frame(self) -> QRectF:
+        return self._px(0, 0, *self.size_mm)
+
+    def _boxes(self) -> dict[int, QRectF]:
+        out = {}
+        for i, r in self.items.items():
+            q = self._px(*r).adjusted(2, 2, -2, -2)
+            if q.height() < 18:                  # a legend band above / below: readable
+                if r[1] < self.size_mm[1] / 2:
+                    q.setTop(q.bottom() - 18)
                 else:
-                    r.setBottom(r.top() + 18)
-        if self.legend_i is not None and all(i != self.legend_i for i, _ in out):
-            out.append((self.legend_i, QRectF(f.center().x() - 90, self.height() - 26, 180, 22)))
+                    q.setBottom(q.top() + 18)
+            out[i] = q
+        if self.legend_i is not None and self.legend_i not in out:    # in each panel / none
+            f = self._frame()
+            out[self.legend_i] = QRectF(f.center().x() - 80, f.bottom() + self.M - 4, 160, 20)
         return out
 
     def _zones(self) -> dict[str, QRectF]:
+        """Where the legend goes outside the grid; 'right' past the free column (the '+'), so
+        a row's free place stays a place for it in the grid."""
         f, m = self._frame(), self.M
-        return {"top": QRectF(f.left(), f.top() - m, f.width(), m - 2),
-                "bottom": QRectF(f.left(), f.bottom() + 2, f.width(), m - 2),
-                "right": QRectF(f.right() + 2, f.top(), m - 2, f.height())}
+        right = max(f.right(), self._px(*self._ghost()).right())
+        return {"top": QRectF(f.left(), f.top() - m, f.width(), m - 3),
+                "bottom": QRectF(f.left(), f.bottom() + 3, f.width(), m - 3),
+                "right": QRectF(right + 3, f.top(), m - 3, f.height())}
 
-    def _at(self, pos) -> int | None:
-        return next((i for i, r in self._boxes() if r.contains(pos)), None)
+    def _at(self, pos):
+        """The item under *pos*, 'add' on the '+', None."""
+        hit = next((i for i, r in self._boxes().items() if r.contains(pos)), None)
+        if hit is None and self._px(*self._ghost()).adjusted(4, 4, -4, -4).contains(pos):
+            return "add"
+        return hit
 
+    # -- where a drag goes
     def _target(self, pos):
-        """Where the dragged item would go: ("legend", place, item) | ("move", item)."""
+        """('zone', place) | ('slot', row, index) | ('newrow', index) | None, for the item
+        dragged."""
         i = self.drag[0]
         if i == self.legend_i:
             for place, r in self._zones().items():
                 if r.contains(pos):
-                    return ("legend", place, -1)
-        grid = {j for j, _ in self.cells if j != self.legend_i or self.place == "grid"}
-        j = next((j for j, r in self._boxes() if r.contains(pos) and j in grid and j != i), None)
-        if j is None:
+                    return ("zone", place)
+        x, y = self._mm(pos)
+        (ox, oy), (cw, ch) = self.origin, self.cell
+        r = math.floor((y - oy) / ch)
+        if r < 0:
+            return ("newrow", 0) if y > oy - ch / 2 else None
+        if r >= self.rows:
+            return ("newrow", self.rows) if y < oy + (self.rows + 0.5) * ch else None
+        row = [j for j in self._row(r) if j != i]
+        if len(row) >= self.per_row or x < ox - cw / 2:
             return None
-        return ("legend", "grid", j) if i == self.legend_i else ("move", j)
+        return ("slot", r, sum(1 for j in row if self.items[j][0] + cw / 2 < x))
 
+    def _drop(self, to):
+        i = self.drag[0]
+        rows = [[j for j in self._row(r) if j != i] for r in range(self.rows)]
+        if to[0] == "slot":
+            rows[to[1]].insert(to[2], i)
+        elif to[0] == "newrow":
+            rows.insert(to[1], [i])
+        place = to[1] if to[0] == "zone" else "grid" if i == self.legend_i else ""
+        self.arranged.emit([r for r in rows if r], place, i)
+
+    def _mark(self, p, to):
+        """The bar where the dragged item would go."""
+        (cw, ch), (ox, oy) = self.cell, self.origin
+        if to[0] == "zone":
+            p.setBrush(Qt.NoBrush)
+            p.setPen(QPen(FOCUS, 2, Qt.DashLine))
+            return p.drawRect(self._zones()[to[1]])
+        p.setPen(Qt.NoPen)
+        p.setBrush(MARK)
+        if to[0] == "newrow":
+            r = self._px(ox, oy + to[1] * ch, self.per_row * cw, 0)
+            return p.drawRoundedRect(r.adjusted(0, -3, 0, 3), 2, 2)
+        row = [j for j in self._row(to[1]) if j != self.drag[0]]
+        x = self.items[row[to[2]]][0] if to[2] < len(row) else \
+            self.items[row[-1]][0] + cw if row else ox
+        r = self._px(x, oy + to[1] * ch, 0, ch)
+        p.drawRoundedRect(r.adjusted(-3, 2, 3, -2), 2, 2)
+
+    # -- drawing
     def paintEvent(self, _):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        f = self._frame()
         p.fillRect(self.rect(), QColor("#262626"))
-        p.fillRect(f, QColor("#323232"))
-        if not self.cells and self.legend_i is None:
-            p.setPen(QColor("#8d8d8d"))
-            p.drawText(self.rect(), Qt.AlignCenter, "nothing yet")
-            return
-        drag_to = self._target(self.drag[1]) if self.drag else None
+        p.fillRect(self._frame(), QColor("#323232"))
+        boxes = self._boxes()
+        to = self._target(self.drag[1]) if self.drag else None
         if self.drag and self.drag[0] == self.legend_i:
             p.setPen(QPen(QColor("#8d8d8d"), 1, Qt.DashLine))
             for place, r in self._zones().items():
                 p.drawRect(r)
-                p.drawText(r, Qt.AlignCenter, {"top": "above", "bottom": "below",
-                                               "right": "right"}[place])
+                if place != "right":
+                    p.drawText(r, Qt.AlignCenter, "above" if place == "top" else "below")
         font = p.font()
         font.setPointSizeF(8)
         p.setFont(font)
-        for i, r in self._boxes():
+        for i, r in boxes.items():
             leg, on = i == self.legend_i, i == self.sel
+            p.setOpacity(0.35 if self.drag and self.drag[0] == i else 1.0)
             p.setBrush(QColor("#2f3d38" if leg else "#3d3d3d"))
             p.setPen(QPen(FOCUS if on else QColor(ACCENT if leg else "#6a6a6a"), 2 if on else 1))
             p.drawRoundedRect(r, 4, 4)
             p.setPen(QColor("#e0e0e0"))
             p.drawText(r.adjusted(4, 2, -4, -2), Qt.AlignCenter | Qt.TextWordWrap,
                        self.texts.get(i, ""))
-        if drag_to:
-            r = self._zones()[drag_to[1]] if drag_to[0] == "legend" and drag_to[2] < 0 else                 dict(self._boxes())[drag_to[-1]]
+        p.setOpacity(1.0)
+        if self.drag:                            # the free places in the rows
             p.setBrush(Qt.NoBrush)
-            p.setPen(QPen(FOCUS, 2, Qt.DashLine))
-            p.drawRect(r)
+            p.setPen(QPen(QColor("#5a5a5a"), 1, Qt.DashLine))
+            for r in range(self.rows):
+                for c in range(len(self._row(r)), self.per_row):
+                    p.drawRoundedRect(self._px(self.origin[0] + c * self.cell[0],
+                                               self.origin[1] + r * self.cell[1],
+                                               *self.cell).adjusted(4, 4, -4, -4), 4, 4)
+        else:
+            g = self._px(*self._ghost()).adjusted(6, 6, -6, -6)
+            p.setBrush(Qt.NoBrush)
+            p.setPen(QPen(QColor(ACCENT), 1, Qt.DashLine))
+            p.drawRoundedRect(g, 4, 4)
+            f = p.font()
+            f.setPointSizeF(16)
+            p.setFont(f)
+            p.drawText(g, Qt.AlignCenter, "+")
         if self.drag:
-            src = dict(self._boxes())[self.drag[0]]
-            p.setOpacity(0.5)
+            src = boxes[self.drag[0]]
+            p.setOpacity(0.45)
             p.setBrush(FOCUS)
             p.setPen(Qt.NoPen)
             p.drawRoundedRect(QRectF(src).translated(self.drag[1] - self.press[1]), 4, 4)
+            p.setOpacity(1.0)
+        if to:                                   # over the dragged box: always seen
+            self._mark(p, to)
 
+    # -- mouse
     def mousePressEvent(self, e):
         self.setFocus()
-        i = self._at(e.position())
-        self.press = (i, e.position()) if i is not None else None
-        if i is None:
+        hit = self._at(e.position())
+        if e.button() == Qt.RightButton:
+            if isinstance(hit, int):
+                self.picked.emit(hit)
+                self.menu.emit(hit, e.globalPosition().toPoint())
+            return
+        if hit == "add":
+            return self.add.emit()
+        self.press = (hit, e.position()) if hit is not None else None
+        if hit is None:
             self.picked.emit(-1)
 
     def mouseMoveEvent(self, e):
@@ -146,16 +257,23 @@ class Schematic(QWidget):
             self.update()
 
     def mouseReleaseEvent(self, e):
-        press, drag, self.press = self.press, self.drag, None
-        to = self._target(e.position()) if drag else None
-        self.drag = None
-        self.update()
-        if to and to[0] == "move":
-            self.moved.emit(drag[0], to[1])
-        elif to:
-            self.legend.emit(to[1], to[2])
-        elif press and not drag:
+        press, self.press = self.press, None
+        if self.drag:
+            self.drag = (self.drag[0], e.position())
+            to = self._target(e.position())
+            if to:
+                self._drop(to)
+            self.drag = None
+            self.update()
+        elif press:
             self.picked.emit(press[0])
+
+    def keyPressEvent(self, e):
+        if e.key() == Qt.Key_Escape and self.drag:
+            self.press = self.drag = None
+            self.update()
+            return
+        super().keyPressEvent(e)
 
 
 class FigureTab(QWidget):
@@ -268,17 +386,22 @@ class FigureTab(QWidget):
         rv.addWidget(self.view, 1)
         self.schema = Schematic()
         self.schema.picked.connect(lambda i: self.items.setCurrentRow(i + 1))
-        self.schema.moved.connect(self._move_to)
-        self.schema.legend.connect(self._legend_to)
+        self.schema.arranged.connect(self._arrange)
+        self.schema.add.connect(lambda: self.add(end=True))
+        self.schema.menu.connect(self._schema_menu)
         self.schema.addAction(QAction(self.schema, shortcut=QKeySequence.Delete,
                                       triggered=self.remove, shortcutContext=Qt.WidgetShortcut))
+        self.schema.setToolTip("Click a box to select it; drag it where the bar shows (between "
+                               "panels, a new row above or below; the legend also above, below "
+                               "or right of the figure); + adds a panel; right-click: its menu; "
+                               "Del removes the selected panel")
         mid = QWidget()
         mv = QVBoxLayout(mid)
         mv.setContentsMargins(0, 0, 0, 0)
-        cap = QLabel("Layout — click to select; drag a panel onto another's place, the legend "
-                     "to a side or into the grid", wordWrap=True)
-        cap.setStyleSheet("color: #8d8d8d")
-        mv.addWidget(cap)
+        self.bar_box = QWidget()
+        self.bar = QGridLayout(self.bar_box)
+        self.bar.setContentsMargins(0, 0, 0, 0)
+        mv.addWidget(self.bar_box)
         mv.addWidget(self.schema, 1)
         split = QSplitter()
         for w in (side, mid, right):
@@ -324,6 +447,7 @@ class FigureTab(QWidget):
         self.items.setCurrentRow(self.sel + 1)
         self.items.blockSignals(False)
         self.build_options()
+        self.build_bar()
         self.render()
 
     def _describe(self, p) -> str:
@@ -344,26 +468,73 @@ class FigureTab(QWidget):
         self.schema.sel = self.sel
         self.schema.update()
 
-    def _move_to(self, i, j):
-        """Item *i* to item *j*'s place (j and those after it shift by one)."""
+    def _arrange(self, rows, place, moved):
+        """The layout as dropped: the grid's items (indices in panels()) row by row - a row
+        after the first starts with a 'newrow' item -, the others after them; *place*: the
+        legend's, '' as it was; *moved* selected."""
         own = self._own_panels()
-        self._snap("order")
-        own.insert(j, own.pop(i))
-        self.sel = j
+        self._snap("layout")
+        it = own[moved]
+        order = [i for r in rows for i in r]
+        new = []
+        for r, row in enumerate(rows):
+            for k, i in enumerate(row):
+                own[i].pop("newrow", None)
+                if r and not k:
+                    own[i]["newrow"] = True
+                new.append(own[i])
+        for i, q in enumerate(own):
+            if i not in order:
+                q.pop("newrow", None)
+                new.append(q)
+        self.fig_dict()["panels"] = new
+        if place:
+            self.fig_dict().setdefault("options", {})["legend"] = place
+        self.sel = next(k for k, q in enumerate(new) if q is it)
         self._changed()
         self.refresh()
 
-    def _legend_to(self, place, j):
-        self._snap("legend")
-        self.fig_dict().setdefault("options", {})["legend"] = place
+    def _schema_menu(self, i, at):
+        own = self.panels()
+        m = QMenu(self)
+        if own[i].get("kind") == "legend":
+            cur = plots.options(self.win.exp)["legend"]
+            for label, v in plots.SPEC["legend"]["choices"]:
+                a = m.addAction(label)
+                a.setCheckable(True)
+                a.setChecked(v == cur)
+                a.triggered.connect(lambda _=False, v=v: self._set("legend", v, None))
+        else:
+            m.addAction("Add a copy").triggered.connect(self.add)
+            m.addAction("Start a row here" if not own[i].get("newrow") else "Join the row above"
+                        ).triggered.connect(lambda: self._newrow(i))
+            m.addAction("Remove (Del)").triggered.connect(self.remove)
+        m.exec(at)
+
+    def _newrow(self, i):
         own = self._own_panels()
-        li = next(k for k, p in enumerate(own) if p.get("kind") == "legend")
-        if j >= 0:
-            own.insert(j, own.pop(li))
-            li = j
-        self.sel = li
+        self._snap("layout")
+        if own[i].pop("newrow", None) is None:
+            own[i]["newrow"] = True
         self._changed()
         self.refresh()
+
+    def build_bar(self):
+        """The layout's options over the boxes: panel size, width, columns, legend."""
+        while self.bar.count():
+            w = self.bar.takeAt(0).widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+        for r, c, label, key in ((0, 0, "panel", "panel_w"), (0, 2, "×", "panel_h"),
+                                 (0, 4, "columns", "cols"), (1, 0, "width ≤", "max_w"),
+                                 (1, 2, "legend", "legend")):
+            w = self._widget(key, None)
+            if key == "cols":
+                w.setSpecialValueText("auto")
+            self.bar.addWidget(QLabel(label), r, c, Qt.AlignRight)
+            self.bar.addWidget(w, r, c + 1, 1, 3 if key == "legend" else 1)
+        guard_wheel(self.bar_box)
 
     def _box_text(self, p) -> str:
         exp = self.win.exp
@@ -446,7 +617,8 @@ class FigureTab(QWidget):
             lay.addWidget(self._panel_box(p))
         sections = {}
         for spec in plots.OPTIONS:
-            if spec["key"] not in visible or (p is not None and spec["scope"] != "both"):
+            if spec["key"] not in visible or spec["bar"] or \
+                    (p is not None and spec["scope"] != "both"):
                 continue
             if spec["section"] not in sections:
                 box = QGroupBox(spec["section"] + ("" if p is None else " — this panel"))
@@ -547,11 +719,20 @@ class FigureTab(QWidget):
         if dot:
             f.addRow("y", chan("y", "SSC-A"))
         pop = QComboBox(toolTip="dot plot: whose events; histograms, values: the population "
-                                "measured")
+                                "shown, with the ranges below it - the group's first such "
+                                "panel is what the summary table and the report measure")
+        grp_ = p.get("group", "")
+
+        def with_ranges(name):
+            rs = [x.name for x in exp.gates.get(grp_, [])
+                  if x.kind == "range" and x.name in exp.below(grp_, name)]
+            return exp.name("population", name) + \
+                (f" — with {', '.join(rs)}" if rs and not dot else "")
+
         pop.addItem("events of: all events" if dot else
-                    f"the main one ({exp.main_population(p.get('group', ''))})", "")
-        for g in exp.gates.get(p.get("group", ""), []):
-            pop.addItem(exp.name("population", g.name), g.name)
+                    f"the main one: {with_ranges(exp.main_population(grp_))}", "")
+        for g in exp.gates.get(grp_, []):
+            pop.addItem(with_ranges(g.name), g.name)
         pop.setCurrentIndex(max(0, pop.findData(p.get("population", ""))))
         pop.currentIndexChanged.connect(lambda _: self._panel_set("population", pop.currentData()))
         f.addRow("population", pop)
@@ -652,20 +833,26 @@ class FigureTab(QWidget):
         self.refresh()
 
     # -- panels
-    def add(self):
+    def add(self, end=False):
+        """A panel after the selected one, a copy of it; *end* (the layout's +): last, a
+        group not shown yet, else a copy of the last panel."""
         exp = self.win.exp
         if not exp.groups():
             return
         own = self._own_panels()
-        cur = own[self.sel] if 0 <= self.sel < len(own) else None
+        cur = own[self.sel] if 0 <= self.sel < len(own) and not end else None
+        shown = {p.get("group") for p in own}
+        last = [p for p in own if p.get("kind") != "legend"]
         if cur is not None and cur.get("kind") != "legend":
             new = copy.deepcopy(cur)
+        elif end and last and all(g in shown for g in exp.groups()):
+            new = copy.deepcopy(last[-1])
         else:
-            shown = {p.get("group") for p in own}
-            g = next((g for g in exp.groups() if g not in shown), exp.groups()[0])
-            new = plots.new_panel(g)
+            new = plots.new_panel(next((g for g in exp.groups() if g not in shown),
+                                       exp.groups()[0]))
+        new.pop("newrow", None)
         self._snap("add")
-        at = self.sel + 1 if self.sel >= 0 else len(own)
+        at = len(own) if end or self.sel < 0 else self.sel + 1
         own.insert(at, new)
         self.sel = at
         self._changed()
@@ -698,9 +885,8 @@ class FigureTab(QWidget):
         w, h = plots.figure(self.win.exp, draw=False, style=scaled)
         items = self.panels()
         li = next((k for k, p in enumerate(items) if p.get("kind") == "legend"), None)
-        self.schema.set_layout(self.fig.quickflow_cells,
-                               {k: self._box_text(p) for k, p in enumerate(items)}, (w, h), li,
-                               plots.options(self.win.exp)["legend"], self.sel)
+        self.schema.set_layout(self.fig, {k: self._box_text(p) for k, p in enumerate(items)},
+                               li, plots.options(self.win.exp)["legend"], self.sel)
         self.size.setText(f"{w:.0f} × {h:.0f} mm")
         self.zoom.setText(f"{self.view.zoom_percent():.0f} %")
 

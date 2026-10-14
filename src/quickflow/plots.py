@@ -38,13 +38,14 @@ KINDS = [("histogram", "Histograms"), ("dot", "Dot plot"), ("bars", "Values (bar
 Y_LABEL = {"mode": "% of max", "count": "Count", "area": "% of events / channel"}
 
 
-def _o(key, label, section, kind, default, scope="both", shown=True, **kw):
+def _o(key, label, section, kind, default, scope="both", shown=True, bar=False, **kw):
     return dict(key=key, label=label, section=section, kind=kind, default=default,
-                scope=scope, shown=shown, **kw)
+                scope=scope, shown=shown, bar=bar, **kw)
 
 
 # every figure option: section, widget, default; scope "fig" = the figure's only, "both" =
-# a panel may override it; shown = in the option list unless hidden in Options ▸ Figure
+# a panel may override it; shown = in the option list unless hidden in Options ▸ Figure;
+# bar = set on the layout's bar (over the boxes), not in the list
 OPTIONS = [
     _o("bw", "black & white", "Style", "check", False,
        tip="black lines with dashes, the control filled grey: for print"),
@@ -79,15 +80,15 @@ OPTIONS = [
     _o("x_lo", "x from 10^", "Axes", "int", 0, lo=0, hi=9, shown=False),
     _o("x_hi", "x up to 10^ (0: the scale's top)", "Axes", "int", 0, lo=0, hi=9, shown=False),
     _o("panel_w", "panel width", "Layout", "float", 60.0, lo=20, hi=400, step=5, suffix=" mm",
-       scope="fig"),
+       scope="fig", bar=True),
     _o("panel_h", "panel height", "Layout", "float", 50.0, lo=20, hi=400, step=5,
-       suffix=" mm", scope="fig"),
+       suffix=" mm", scope="fig", bar=True),
     _o("max_w", "figure width at most", "Layout", "float", 180.0, lo=40, hi=800, step=5,
-       suffix=" mm", scope="fig",
+       suffix=" mm", scope="fig", bar=True,
        tip="panels go on as many columns as fit, then a new row"),
     _o("cols", "columns (0: as many as fit)", "Layout", "int", 0, lo=0, hi=12, scope="fig",
-       shown=False),
-    _o("legend", "legend", "Layout", "choice", "bottom", scope="fig",
+       bar=True, tip="a row holds at most this many panels"),
+    _o("legend", "legend", "Layout", "choice", "bottom", scope="fig", bar=True,
        choices=[("below the figure", "bottom"), ("above the figure", "top"),
                 ("right of the figure", "right"), ("in the grid, at its place", "grid"),
                 ("in each panel", "panel"), ("none", "none")]),
@@ -141,7 +142,8 @@ def migrate(fig: dict) -> dict:
     o.update(bw=old.get("style") == "bw", layout=old.get("layout", "overlay"),
              y=old.get("y", "mode"), smooth=old.get("smooth", True),
              fill=old.get("fill", True), gates=old.get("gates", True),
-             legend={"shared": "bottom", "panel": "panel"}.get(old.get("legend"), "none"))
+             legend={"shared": "bottom", "panel": "panel"}.get(old.get("legend"), "none"),
+             cols=int(old.get("cols") or 0))
     if old.get("font_pt"):
         o.update(label_pt=old["font_pt"], tick_pt=old["font_pt"] - 1,
                  title_pt=old["font_pt"] + 1, legend_pt=old["font_pt"] - 0.5)
@@ -169,6 +171,27 @@ def panels(exp) -> list[dict]:
         out.append({"kind": "legend"})
     elif len(legends) > 1:
         out = [p for p in out if p.get("kind") != "legend" or p is legends[0]]
+    return out
+
+
+def measured(exp, group: str) -> str:
+    """The population the figure shows for *group* (its first histogram or bars panel's),
+    else the group's main one: what the summary table measures."""
+    for p in panels(exp):
+        if p.get("group") == group and p.get("kind") in ("histogram", "bars"):
+            return p.get("population") or exp.main_population(group)
+    return exp.main_population(group)
+
+
+def grid_places(items: list[dict], per_row: int) -> list[tuple[int, int]]:
+    """(row, column) of each grid item: left to right, a new row when the row is full or
+    the item starts one ("newrow", set by dragging it there)."""
+    out, r, c = [], 0, 0
+    for p in items:
+        if c and (c >= per_row or p.get("newrow")):
+            r, c = r + 1, 0
+        out.append((r, c))
+        c += 1
     return out
 
 
@@ -510,8 +533,10 @@ def figure(exp, fig: Figure | None = None, draw: bool = True, style: dict | None
     pw, ph = o["panel_w"], o["panel_h"]
     leg_w = _legend_size(names, o, None)[1] if place == "right" and names else 0.0
     fit = max(1, int((o["max_w"] - leg_w + 0.01) // pw))
-    cols = max(1, min(o["cols"] or fit, fit, len(grid) or 1))
-    rows = max(1, math.ceil(len(grid) / cols))
+    per_row = min(o["cols"] or fit, fit)
+    places = grid_places([p for _, p in grid], per_row)
+    cols = max([c + 1 for _, c in places] or [1])
+    rows = max([r + 1 for r, _ in places] or [1])
     W = cols * pw + leg_w
     lcols, _, leg_h = _legend_size(names, o, W) if place in ("top", "bottom") and names \
         else (1, 0, 0.0)
@@ -527,13 +552,14 @@ def figure(exp, fig: Figure | None = None, draw: bool = True, style: dict | None
         clear = o["background"] == "none"
         fig.patch.set_facecolor("none" if clear else "white")
         fig.quickflow_cells = []
+        fig.quickflow_grid = {"places": {i: rc for (i, _), rc in zip(grid, places)},
+                              "rows": rows, "cols": cols, "per_row": per_row}
         if not grid and not names:
             fig.text(0.5, 0.5, "Nothing to plot yet: add FCS files (or a panel with +)",
                      ha="center", va="center", color=MUTED, fontsize=8)
             return fig
         y_top = H - (leg_h if place == "top" else 0)
-        for k, (i, p) in enumerate(grid):
-            r, c = divmod(k, cols)
+        for (i, p), (r, c) in zip(grid, places):
             x0, y1 = c * pw, y_top - r * ph
             fig.quickflow_cells.append((i, (x0 / W, (y1 - ph) / H, (x0 + pw) / W, y1 / H)))
             if p.get("kind") == "legend":

@@ -68,6 +68,7 @@ def main(argv) -> int:
     w.open_paths([data / "procedures" / "TheraSen_260629_FACS_autres_lignees.xlsx"])
     rec = w.exp.record
     assert len(rec["procedure"]) > 10 and any(r["catalog #"] == "AB9108" for r in rec["reagents"])
+    assert any(r["kind"] == "sample" for r in rec["reagents"]), "the binders tested: kind sample"
     assert rec["groups"]["OVCAR"]["cell line"] == "OVCAR-3", rec["groups"]
     s = next(s for s in w.exp.samples if s.group == "PC3" and s.label == "29A1")
     assert "29A1" in s.fields.get("condition", "") and s.fields.get("secondary µL"), s.fields
@@ -151,6 +152,37 @@ def main(argv) -> int:
     assert any(e.get(G + "parent_id") for e in kids), "nested gates keep their parent"
     poly = next(e for e in kids if e.tag == G + "PolygonGate")
     assert len(poly.findall(G + "vertex")) >= 3
+    # and read back: the same gates, each in its group
+    from dataclasses import asdict
+    before = {k: [asdict(x) for x in v] for k, v in w.exp.gates.items()}
+    e2, _ = model.Experiment.from_dict(w.exp.to_dict())
+    for k in e2.gates:
+        e2.gates[k] = []
+    gatingml.apply(e2, out / "gates.xml")
+    after = {k: [asdict(x) for x in v] for k, v in e2.gates.items()}
+    assert after == before, (before, after)
+    w.open_paths([out / "gates.xml"])                  # through the window: the file recorded
+    assert {k: [asdict(x) for x in v] for k, v in w.exp.gates.items()} == before
+    assert w.exp.gates_from().get("how") == "imported"
+    # another program's file: no group (every group gets it); a transformed gate not read
+    (out / "other.xml").write_text(f"""<?xml version="1.0"?>
+<gating:Gating-ML xmlns:gating="{G[1:-1]}" xmlns:data-type="http://www.isac-net.org/std/Gating-ML/v2.0/datatypes">
+ <gating:RectangleGate gating:id="Pos"><gating:dimension gating:min="5000">
+  <data-type:fcs-dimension data-type:name="FL2-A"/></gating:dimension></gating:RectangleGate>
+ <gating:RectangleGate gating:id="Logged"><gating:dimension gating:min="2" gating:transformation-ref="T1">
+  <data-type:fcs-dimension data-type:name="FL2-A"/></gating:dimension></gating:RectangleGate>
+</gating:Gating-ML>""", encoding="utf-8")
+    from quickflow import imports
+    assert imports.kind(out / "other.xml") == "gatingml" and imports.kind(out / "gates.xml")
+    (out / "not.xml").write_text("<root/>", encoding="utf-8")
+    assert imports.kind(out / "not.xml") == ""
+    gs_, skipped = gatingml.read(out / "other.xml")
+    assert [x["name"] for x in gs_] == ["Pos"] and "Logged" in skipped[0], (gs_, skipped)
+    w.open_paths([out / "other.xml"])
+    assert all([x.name for x in w.exp.gates[k]] == ["Pos"] for k in w.exp.groups())
+    w.do_undo()
+    w.do_undo()
+    assert {k: [asdict(x) for x in v] for k, v in w.exp.gates.items()} == before
     w.do_undo()
     g = w.gating_tab
     # a range under a polygon the figure doesn't use: said, and one click uses it
@@ -162,8 +194,14 @@ def main(argv) -> int:
     w.changed()
     g = w.gating_tab
     assert g.warn.isVisibleTo(g) and "hi 9" in g.warn.text(), g.warn.text()
+    assert not any(r["sub-population"] == "hi 9" for r in report.summary_rows(w.exp))
     g._use(str(len(gs) - 2))
-    assert w.exp.main_population(g.group) == "gate 9" and not g.warn.isVisibleTo(g)
+    from quickflow import plots
+    assert plots.measured(w.exp, g.group) == "gate 9" and not g.warn.isVisibleTo(g)
+    sr = [r for r in report.summary_rows(w.exp) if r["group"] == g.group]
+    assert any(r["sub-population"] == "hi 9" for r in sr), "the summary follows the figure"
+    assert any(r["role"] == "negative control" and r["÷ control"] == 1.0
+               for r in sr if not r["sub-population"]), sr
     w.do_undo()
     w.do_undo()
     g = w.gating_tab
@@ -253,21 +291,55 @@ def main(argv) -> int:
     assert f.sel == 1, f.sel
     f._set("lw", 2.0, f.panels()[f.sel])
     assert f.panels()[1]["opts"]["lw"] == 2.0, "a panel's own option"
-    from PySide6.QtWidgets import QDoubleSpinBox
+    from PySide6.QtWidgets import QDoubleSpinBox, QSpinBox
     spins = f.opt_box.findChildren(QDoubleSpinBox)
     assert spins and all("," not in x.text() for x in spins), [x.text() for x in spins]
     f._set("axis_lw", 1.5, None)
     f.render()
     assert any(abs(sp.get_linewidth() - 1.5) < 1e-6 for ax in f.fig.axes for sp in ax.spines.values())
-    # the layout: boxes as the figure's cells; a panel onto another's place, the legend above
-    assert len(f.schema._boxes()) == len(f.panels()), (f.schema._boxes(), f.panels())
-    first = f.panels()[0]
-    f._move_to(0, 2)
-    assert f.panels()[2] is first or f.panels()[2] == first, "panel moved"
+    # the layout, with the mouse: + adds a panel (3 + 1), one dragged down makes 2 × 2, the
+    # legend into the grid, then above the figure
+    from PySide6.QtCore import QPoint
+    from PySide6.QtTest import QTest
+    sc = f.schema
+    a.processEvents()
+
+    def places():
+        return dict(f.fig.quickflow_grid["places"])
+
+    def drag(src, dst):
+        src, dst = src.toPoint() if hasattr(src, "toPoint") else src, dst
+        QTest.mousePress(sc, Qt.LeftButton, Qt.NoModifier, src)
+        QTest.mouseMove(sc, src + QPoint(12, 12))
+        QTest.mouseMove(sc, dst)
+        QTest.mouseRelease(sc, Qt.LeftButton, Qt.NoModifier, dst)
+        a.processEvents()
+
+    assert len(sc._boxes()) == len(f.panels()), (sc._boxes(), f.panels())
+    assert f.fig.quickflow_grid["per_row"] == 3 and len(places()) == 3, f.fig.quickflow_grid
+    QTest.mouseClick(sc, Qt.LeftButton, Qt.NoModifier, sc._px(*sc._ghost()).center().toPoint())
+    assert len(places()) == 4 and sorted(places().values())[-1] == (1, 0), places()
+    third = next(i for i, rc in places().items() if rc == (0, 2))
+    fourth = next(i for i, rc in places().items() if rc == (1, 0))
+    b = sc._boxes()
+    drag(b[third].center(), QPoint(int(b[fourth].left()) + 4, int(b[fourth].center().y())))
+    assert sorted(places().values()) == [(0, 0), (0, 1), (1, 0), (1, 1)], places()
+    b, li = sc._boxes(), sc.legend_i
+    last = max((i for i, rc in places().items() if rc[0] == 1), key=lambda i: places()[i][1])
+    drag(b[li].center(), QPoint(int(b[last].right()) + 15, int(b[last].center().y())))
+    assert plots.options(w.exp)["legend"] == "grid" and places()[sc.legend_i] == (1, 2), places()
+    drag(sc._boxes()[sc.legend_i].center(), sc._zones()["top"].center().toPoint())
+    assert plots.options(w.exp)["legend"] == "top" and sorted(places().values()) == \
+        [(0, 0), (0, 1), (1, 0), (1, 1)], places()
     f.schema.picked.emit(1)
     assert f.sel == 1 and f.items.currentRow() == 2, "the box picks the list's line"
-    f._legend_to("top", -1)
-    assert plots.options(w.exp)["legend"] == "top"
+    f.build_bar()
+    cols = next(x for x in f.bar_box.findChildren(QSpinBox) if x.specialValueText() == "auto")
+    cols.setValue(1)
+    f.render()
+    assert sorted(places().values())[-1][1] == 0, "one column"
+    cols.setValue(0)
+    f.render()
     W0 = plots.figure(w.exp, draw=False)[0]
     f.res.setValue(20)
     f.render()
