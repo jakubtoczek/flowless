@@ -3,8 +3,8 @@ plots.py's, the report report.py's; the Gating and Figure tabs are gating.py's a
 figtab.py's, built the first time they're opened (matplotlib loads meanwhile).
 
 Tabs, in the order of the work: Samples → Gating → Figure → Results → Experiment.
-Drop anything anywhere: FCS files or folders, a saved experiment (.json); a workspace's
-gates (.wsp) or a procedure sheet (.xlsx) are read too.
+Drop anything anywhere: FCS files or folders, a saved experiment (.json); imports/ reads
+the rest it can.
 """
 
 from __future__ import annotations
@@ -14,16 +14,18 @@ import json
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import QMarginsF, QMimeData, Qt, QTimer, QUrl
-from PySide6.QtGui import (QAction, QIcon, QImage, QKeySequence, QPageLayout, QPageSize,
-                           QPdfWriter, QTextDocument)
-from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QApplication, QCheckBox,
-                               QComboBox, QCompleter, QDialog, QDialogButtonBox, QFileDialog,
-                               QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QInputDialog,
-                               QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
-                               QMenu, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea,
-                               QSizePolicy, QSplitter, QStyledItemDelegate, QTableWidget,
-                               QTableWidgetItem, QTabWidget, QToolButton, QVBoxLayout, QWidget)
+from PySide6.QtCore import QEvent, QEventLoop, QLocale, QMarginsF, QMimeData, QObject, Qt, QTimer, QUrl
+from PySide6.QtGui import (QAction, QBrush, QColor, QIcon, QImage, QKeySequence, QPageLayout,
+                           QPageSize, QPainter, QPdfWriter, QPixmap, QShortcut, QTextDocument)
+from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QAbstractSpinBox,
+                               QApplication, QCheckBox, QComboBox, QCompleter, QDialog,
+                               QDialogButtonBox, QFileDialog, QFormLayout, QFrame, QGroupBox,
+                               QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit,
+                               QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox,
+                               QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy, QSplitter,
+                               QStackedWidget, QStyledItemDelegate, QTableWidget,
+                               QTableWidgetItem, QTabWidget, QTextBrowser, QToolButton,
+                               QVBoxLayout, QWidget)
 
 from . import __version__, fcs, imports, model, record
 
@@ -37,9 +39,51 @@ SHOWN_COLUMNS = ["⤢", "plot", "group", "label", "role", "condition", "file"]
 DEFAULT_OPTIONS = {"negatives": ["0006", "R3B23"], "procedures": {}, "lists": {},
                    "last_dir": "", "aliases": {}, "sample_columns": SHOWN_COLUMNS,
                    "figure_options": None, "dpi": 300}
-HINT = ("Drop FCS files or folders anywhere on this window, or a saved experiment (.json).\n"
-        "A procedure sheet (.xlsx) or a workspace's gates (.wsp) are read too.")
+HINT = "Drop FCS files or folders anywhere on this window, or a saved experiment (.json)."
 MAX_COL = 280                                             # px: no column wider at first
+ACCENT = "#4a9782"                                        # ⤢ ▤: what opens more, the suite's
+
+
+def glyph_icon(text: str, colour: str = ACCENT) -> QIcon:
+    """A character as an icon (▤ on a toolbar button, the text beside it)."""
+    pm = QPixmap(32, 32)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    f = p.font()
+    f.setPixelSize(52)                     # the glyph is about half its em: 26 px of 32
+    p.setFont(f)
+    p.setPen(QColor(colour))
+    p.drawText(pm.rect(), Qt.AlignCenter, text)
+    p.end()
+    return QIcon(pm)
+
+
+class WheelGuard(QObject):
+    """The wheel scrolls the page, never a value: a list or a number under the pointer
+    while scrolling stays as set (the wheel goes to the scroll area around it). On those
+    boxes only (guard_wheel): a filter on the whole application costs every event a call
+    into Python."""
+
+    def eventFilter(self, obj, e):
+        if e.type() == QEvent.Wheel and isinstance(obj, (QComboBox, QAbstractSpinBox)):
+            w = obj.parentWidget()
+            while w is not None and not isinstance(w, QAbstractScrollArea):
+                w = w.parentWidget()
+            if w is not None:
+                QApplication.sendEvent(w.verticalScrollBar(), e)
+            return True
+        return False
+
+
+_guard = None
+
+
+def guard_wheel(root: QWidget) -> None:
+    """The lists and number boxes under *root*: the wheel passes them by."""
+    global _guard
+    _guard = _guard or WheelGuard()
+    for w in root.findChildren(QComboBox) + root.findChildren(QAbstractSpinBox):
+        w.installEventFilter(_guard)
 
 
 def app_icon():
@@ -96,6 +140,7 @@ def fit_columns(t: QTableWidget, cap: int = MAX_COL, stretch: bool = True) -> No
 def _expand_item() -> QTableWidgetItem:
     it = _item("⤢", False)
     it.setTextAlignment(Qt.AlignCenter)
+    it.setForeground(QBrush(QColor(ACCENT)))
     it.setToolTip("everything about this row")
     return it
 
@@ -166,6 +211,7 @@ class InfoDialog(QDialog):
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)
         v.addWidget(bb)
+        guard_wheel(self)
 
     def values(self) -> dict:
         out = {}
@@ -913,53 +959,232 @@ class AliasDialog(QDialog):
         self.win.changed()
 
 
+# --- Options ----------------------------------------------------------------------------
+
+class OptionsDialog(QDialog):
+    """The options, a topic per page (list on the left); each applies as it is ticked and
+    is remembered."""
+
+    def __init__(self, win):
+        super().__init__(win)
+        self.win = win
+        self.setWindowTitle("Options")
+        self.resize(860, 600)
+        self.topics = QListWidget()
+        self.topics.setFixedWidth(190)
+        self.pages = QStackedWidget()
+        self.topics.currentRowChanged.connect(self.pages.setCurrentIndex)
+        for name, page in (("Samples table", self._columns()), ("Channels", self._channels()),
+                           ("Figure options", self._figure())):
+            self.topics.addItem(name)
+            sc = QScrollArea(widgetResizable=True)
+            sc.setFrameShape(QFrame.NoFrame)
+            sc.setWidget(page)
+            self.pages.addWidget(sc)
+        self.topics.setCurrentRow(0)
+        where = QLabel(f"remembered as they change, in {OPTIONS}")
+        where.setStyleSheet("color: #8d8d8d")
+        h = QHBoxLayout()
+        h.addWidget(self.topics)
+        h.addWidget(self.pages, 1)
+        v = QVBoxLayout(self)
+        v.addLayout(h, 1)
+        v.addWidget(where)
+
+    @staticmethod
+    def _page(title, text):
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(16, 4, 8, 4)
+        t = QLabel(f"<b>{title}</b>")
+        t.setStyleSheet("font-size: 14px")
+        v.addWidget(t)
+        d = QLabel(text, wordWrap=True)
+        d.setStyleSheet("color: #8d8d8d")
+        v.addWidget(d)
+        return w, v
+
+    def _columns(self):
+        w, v = self._page("Samples table", "The columns of the Samples tab (also: right-click "
+                                            "a column's title). ⤢ always shows everything.")
+        st = self.win.samples_tab
+        boxes = {}
+
+        def sync():
+            want = set(self.win.opts.get("sample_columns") or SHOWN_COLUMNS)
+            for c, b in boxes.items():
+                b.blockSignals(True)
+                b.setChecked(c in want)
+                b.blockSignals(False)
+
+        for c in st.cols:
+            if c != "⤢":
+                boxes[c] = b = QCheckBox(c)
+                b.toggled.connect(lambda on, c=c: st._toggle_column(c, on))
+                v.addWidget(b)
+        sync()
+        usual = QPushButton("The usual ones")
+        usual.clicked.connect(lambda: (st._set_columns(SHOWN_COLUMNS), sync()))
+        h = QHBoxLayout()
+        h.addWidget(usual)
+        h.addStretch()
+        v.addLayout(h)
+        v.addStretch()
+        return w
+
+    def _channels(self):
+        win = self.win
+        exp = win.exp
+        w, v = self._page("Channels", "The channels offered in the lists (gates, histograms, "
+                                      "figure, values). Any channel a gate uses is always "
+                                      "offered.")
+        if not exp.samples:
+            v.addWidget(QLabel("(no file yet: the channels are the files')"))
+            v.addStretch()
+            return w
+        auto = QCheckBox("automatic: FSC-A, SSC-A and the fluorochromes' areas ("
+                         + ", ".join(exp.name("channel", c) for c in exp.fluorescence()) + ")")
+        v.addWidget(auto)
+        boxes = {}
+
+        def sync():
+            shown = set(win.exp.shown_channels())
+            for b in [auto, *boxes.values()]:
+                b.blockSignals(True)
+            auto.setChecked(not win.exp.channels)
+            for c, b in boxes.items():
+                b.setChecked(c in shown)
+            for b in [auto, *boxes.values()]:
+                b.blockSignals(False)
+
+        def picked():
+            win._set_channels([c for c, b in boxes.items() if b.isChecked()])
+            sync()
+
+        auto.toggled.connect(lambda on: (win._set_channels([] if on else
+                                                           win.exp.shown_channels()), sync()))
+        for c in exp.all_channels():
+            boxes[c] = b = QCheckBox(exp.name("channel", c))
+            b.toggled.connect(picked)
+            v.addWidget(b)
+        sync()
+        v.addStretch()
+        return w
+
+    def _figure(self):
+        from . import plots
+
+        w, v = self._page("Figure options", "The options listed in the Figure tab; the others "
+                                            "keep their value (or the style's).")
+        vis = set(self.win.opts.get("figure_options") or
+                  [o["key"] for o in plots.OPTIONS if o["shown"]])
+        boxes = {}
+        for o in plots.OPTIONS:
+            if o["section"] not in boxes:
+                boxes[o["section"]] = QVBoxLayout(box := QGroupBox(o["section"]))
+                v.addWidget(box)
+            b = QCheckBox(o["label"].replace("&", "&&"), toolTip=o.get("tip", ""))
+            b.setChecked(o["key"] in vis)
+            b.toggled.connect(lambda on, k=o["key"]: self.win._figure_option(k, on))
+            boxes[o["section"]].addWidget(b)
+        v.addStretch()
+        return w
+
+
 # --- Report -----------------------------------------------------------------------------
 
 class ReportDialog(QDialog):
+    """The sections on the left (tick, drag in order), the report as it will read on the
+    right, one Save for the format chosen."""
+
+    FORMATS = [(".pdf", "PDF"), (".html", "Web page (.html)"),
+               (".xlsx", "Excel workbook (the values: a sheet each)")]
+
     def __init__(self, win):
         from . import report
 
         super().__init__(win)
         self.win = win
         self.setWindowTitle("Report")
+        self.resize(1200, 820)
+        self.timer = QTimer(singleShot=True, interval=250, timeout=self.refresh)
+        self.fmt = QComboBox()
+        for ext, label in self.FORMATS:
+            self.fmt.addItem(label, ext)
+        self.fmt.setCurrentIndex(max(0, self.fmt.findData(win.opts.get("report_format"))))
         self.list = QListWidget(toolTip="tick the sections; drag them in order")
         self.list.setDragDropMode(QAbstractItemView.InternalMove)
-        keep = win.opts.get("report", [k for k, _ in report.SECTIONS])
         names = dict(report.SECTIONS)
-        for k in [k for k in keep if k in names] + [k for k in names if k not in keep]:
+        order = [k for k in win.opts.get("report", []) if k in names]
+        off = set(win.opts.get("report_off", []))
+        for k in order + [k for k in names if k not in order]:
             it = QListWidgetItem(names[k])
             it.setData(Qt.UserRole, k)
             it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
-            it.setCheckState(Qt.Checked if k in keep else Qt.Unchecked)
+            it.setCheckState(Qt.Unchecked if k in off else Qt.Checked)
             self.list.addItem(it)
+        self.list.itemChanged.connect(lambda _: self.timer.start())
+        self.list.model().rowsMoved.connect(lambda *_: self.timer.start())
         self.full = QCheckBox("every sample and population in the results, too")
-        v = QVBoxLayout(self)
-        v.addWidget(self.list)
+        self.full.toggled.connect(lambda _: self.timer.start())
+        save = QPushButton("Save report…", toolTip="Ctrl+S")
+        save.clicked.connect(self.save)
+        QShortcut(QKeySequence.Save, self, self.save)
+        side = QWidget()
+        side.setFixedWidth(300)
+        v = QVBoxLayout(side)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.addWidget(QLabel("<b>Format</b>"))
+        v.addWidget(self.fmt)
+        v.addSpacing(8)
+        v.addWidget(QLabel("<b>Sections</b>"))
+        v.addWidget(self.list, 1)
         v.addWidget(self.full)
-        h = QHBoxLayout()
-        for text, ext in (("Save PDF…", ".pdf"), ("Save HTML…", ".html"),
-                          ("Save Excel…", ".xlsx")):
-            b = QPushButton(text)
-            b.clicked.connect(lambda _=False, e=ext: self.save(e))
-            h.addWidget(b)
-        v.addLayout(h)
+        v.addSpacing(8)
+        v.addWidget(save)
+        self.view = QTextBrowser()
+        self.view.setStyleSheet("QTextBrowser { background: white; color: black }")
+        h = QHBoxLayout(self)
+        h.addWidget(side)
+        h.addWidget(self.view, 1)
+        self.refresh()
 
     def sections(self):
         items = [self.list.item(i) for i in range(self.list.count())]
         return [i.data(Qt.UserRole) for i in items if i.checkState() == Qt.Checked]
 
-    def save(self, ext):
+    def _remember(self):
+        items = [self.list.item(i) for i in range(self.list.count())]
+        self.win.opts["report"] = [i.data(Qt.UserRole) for i in items]
+        self.win.opts["report_off"] = [i.data(Qt.UserRole) for i in items
+                                       if i.checkState() != Qt.Checked]
+        self.win.opts["report_format"] = self.fmt.currentData()
+        self.win.save_options()
+
+    def refresh(self):
         from . import report
 
-        win = self.win
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            text, images = report.build(self.win.exp, self.sections(), self.full.isChecked())
+            y = self.view.verticalScrollBar().value()
+            self.view.setDocument(html_document(text, images, self.view))
+            self.view.verticalScrollBar().setValue(y)
+        finally:
+            QApplication.restoreOverrideCursor()
+        self._remember()
+
+    def save(self):
+        from . import report
+
+        win, ext = self.win, self.fmt.currentData()
         p, _ = QFileDialog.getSaveFileName(
             self, "Save the report",
             str(Path(win.opts.get("last_dir") or Path.home()) / (win.stem() + "_report" + ext)),
-            f"{ext[1:].upper()} (*{ext})")
+            f"{self.fmt.currentText()} (*{ext})")
         if not p:
             return
-        win.opts["report"] = self.sections()
-        win.save_options()
+        self._remember()
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
             if ext == ".xlsx":
@@ -975,11 +1200,17 @@ class ReportDialog(QDialog):
         win.log(f"✓ report saved: {p}")
 
 
-def to_pdf(text: str, images: dict, path) -> None:
-    doc = QTextDocument()
+def html_document(text: str, images: dict, parent=None) -> QTextDocument:
+    """The report's HTML with its images, as Qt lays it out (the preview, the PDF)."""
+    doc = QTextDocument(parent)
     for name, png in images.items():
         doc.addResource(QTextDocument.ImageResource, QUrl(name), QImage.fromData(png))
     doc.setHtml(text)
+    return doc
+
+
+def to_pdf(text: str, images: dict, path) -> None:
+    doc = html_document(text, images)
     w = QPdfWriter(str(path))
     w.setPageSize(QPageSize(QPageSize.A4))
     w.setPageMargins(QMarginsF(0, 0, 0, 0), QPageLayout.Millimeter)   # print_ adds 2 cm
@@ -995,7 +1226,8 @@ TABS = ["1  Samples", "2  Gating", "3  Figure", "4  Results", "5  Experiment"]
 
 class MainWindow(QMainWindow):
     def __init__(self):
-        super().__init__()
+        QLocale.setDefault(QLocale.c())     # 1.5, not the system's 1,5: as published; before
+        super().__init__()                  # the window, or it and its children keep the old
         self.opts = load_options()
         self.exp = model.Experiment(record=record.empty())
         self.undo, self.redo = [], []
@@ -1027,9 +1259,8 @@ class MainWindow(QMainWindow):
                 ("Save", QKeySequence.Save, "the experiment as one .json", self.save),
                 ("Save as…", QKeySequence.SaveAs, "", self.save_as),
                 (None, None, None, None),
-                ("Import…", "Ctrl+I", "FCS files or a folder of them, an experiment; a "
-                                      "procedure sheet (.xlsx), a workspace's gates (.wsp) — "
-                                      "the kind is told by the file", self.import_dialog),
+                ("Import…", "Ctrl+I", "FCS files or a folder of them, an experiment — the kind "
+                                      "is told by the file", self.import_dialog),
                 (None, None, None, None),
                 ("Report…", "Ctrl+P", "PDF, HTML or Excel", self.report)]:
             if text is None:
@@ -1045,20 +1276,20 @@ class MainWindow(QMainWindow):
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         bar.addWidget(spacer)
-        bar.addAction(QAction("▤ Aliases…", self, triggered=self.aliases_dialog,
+        bar.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        bar.addAction(QAction(glyph_icon("▤"), "Aliases…", self, triggered=self.aliases_dialog,
                               toolTip="what the figure, the tables and the report call the "
                                       "groups, labels, samples, channels, populations"))
-        ob = QToolButton(text="Options ▾", popupMode=QToolButton.InstantPopup)
-        self.options_menu = QMenu(ob)
-        self.options_menu.aboutToShow.connect(self._fill_options)
-        ob.setMenu(self.options_menu)
-        bar.addWidget(ob)
+        bar.addAction(QAction("Options…", self, triggered=self.options_dialog,
+                              toolTip="what is shown: the samples' columns, the channels, the "
+                                      "figure's options"))
 
         central = QWidget()
         v = QVBoxLayout(central)
         v.addWidget(self.tabs, 1)
         v.addWidget(self.logbox)
         self.setCentralWidget(central)
+        guard_wheel(self)
         self.refresh_all()
         self._title()
         self._warmer = threading.Thread(target=_warm, daemon=True)
@@ -1066,9 +1297,19 @@ class MainWindow(QMainWindow):
 
     def ready(self):
         """Wait for the warm-up before anything that plots: two threads importing
-        matplotlib at once can each get the other's half-loaded module."""
-        if getattr(self, "_warmer", None) is not None and self._warmer.is_alive():
-            self._warmer.join()
+        matplotlib at once can each get the other's half-loaded module. The window keeps
+        painting meanwhile: on a cold start (antivirus, disk) that import takes seconds,
+        and a window that stops answering for 5 s is 'not responding' to Windows."""
+        t = getattr(self, "_warmer", None)
+        if t is None or not t.is_alive():
+            return
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            while t.is_alive():
+                QApplication.processEvents(QEventLoop.ExcludeUserInputEvents, 50)
+                t.join(0.03)
+        finally:
+            QApplication.restoreOverrideCursor()
 
     # -- the tabs built when first opened
     def page(self, i):
@@ -1083,6 +1324,7 @@ class MainWindow(QMainWindow):
             else:
                 w = RecordTab(self)
             self._holders[i].layout().addWidget(w)
+            guard_wheel(w)
             self._pages[i] = w
             self.stale.add(i)
         return self._pages[i]
@@ -1210,36 +1452,9 @@ class MainWindow(QMainWindow):
             d.apply()
 
     # -- options
-    def _fill_options(self):
+    def options_dialog(self):
         self.ready()
-        m = self.options_menu
-        m.clear()
-        self.samples_tab.columns_menu(m.addMenu("Samples: columns shown"))
-        ch = m.addMenu("Channels offered")
-        exp = self.exp
-        auto = ch.addAction("automatic: FSC-A, SSC-A and the fluorochromes' areas"
-                            + (f" ({', '.join(exp.name('channel', c) for c in exp.fluorescence())})"
-                               if exp.samples else ""))
-        auto.setCheckable(True)
-        auto.setChecked(not exp.channels)
-        auto.toggled.connect(lambda on: self._set_channels([] if on else exp.shown_channels()))
-        ch.addSeparator()
-        shown = set(exp.shown_channels())
-        for c in exp.all_channels():
-            a = ch.addAction(exp.name("channel", c))
-            a.setCheckable(True)
-            a.setChecked(c in shown)
-            a.toggled.connect(lambda on, c=c: self._set_channels(
-                [x for x in exp.all_channels() if (x in shown and x != c) or (x == c and on)]))
-        fm = m.addMenu("Figure: options shown")
-        from . import plots
-
-        vis = set(self.opts.get("figure_options") or [o["key"] for o in plots.OPTIONS if o["shown"]])
-        for o in plots.OPTIONS:
-            a = fm.addAction(f"{o['section']} › {o['label']}")
-            a.setCheckable(True)
-            a.setChecked(o["key"] in vis)
-            a.toggled.connect(lambda on, k=o["key"]: self._figure_option(k, on))
+        OptionsDialog(self).exec()
 
     def _set_channels(self, chans):
         self.snap()
@@ -1315,7 +1530,7 @@ class MainWindow(QMainWindow):
             groups = list(dict.fromkeys(s.group for s in added))
             self.log(f"✓ {len(added)} files in {len(groups)} groups: " + ", ".join(groups),
                      "  groups, labels and roles are guessed from the folders and names — "
-                     "check them in Samples; new groups got an automatic 'cells' gate on "
+                     "check them in Samples; new groups got a 'cells (auto)' gate on "
                      "FSC × SSC — check it in Gating")
             for g in groups:
                 worst = {}
@@ -1342,6 +1557,8 @@ class MainWindow(QMainWindow):
             self.undo.pop()
             self.log(f"✗ {p.name}: {e}")
             return
+        self.exp.gates_file = {"path": str(Path(p).resolve()), "how": "imported",
+                               "key": self.exp.gates_key()}
         self.changed()
 
     def import_procedure(self, p):

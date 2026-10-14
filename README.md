@@ -27,9 +27,7 @@ recorded procedures, the columns and options shown, typed values) is in
 ## Use
 
 **Drop files anywhere on the window**, or **Import…** (Ctrl+I): FCS files or whole folders, a
-saved experiment (`.json`). The kind of file is told by the file. Two other programs' files
-are read too, as well as their layout allows: a procedure sheet (`.xlsx`: steps, reagents,
-each tube's condition) and the gates of a FlowJo workspace (`.wsp`). The tabs follow the work;
+saved experiment (`.json`). The kind of file is told by the file. The tabs follow the work;
 hover anything for what it does. The log at the bottom says what happened and what looks
 wrong (✗ ⚠).
 
@@ -47,8 +45,13 @@ wrong (✗ ⚠).
    channels (the dot plot) or a **range** on one (the histogram). **Drag the populations** to
    order or nest them: the figure and the values use the one in **bold** — the first gate, and
    the first polygon below it (cells › singlets). Drag the groups to order them. A new group
-   gets a *cells* gate automatically (the main cluster on FSC × SSC; debris, the off-scale pile
-   and a second cluster left out): check it.
+   gets a *cells (auto)* gate (the main cluster on FSC × SSC; debris, the off-scale pile and a
+   second cluster left out): check it. **Auto gate** redraws the selected polygon that way;
+   with *All events* selected it adds a *cells (auto)* gate beside the others. A ⚠ under the
+   tree says when ranges hang from a population the figure doesn't use, with a link that
+   puts it first. The histogram's y axis: count (the default), % of max, or % of events
+   (each histogram's area 100 %). **Export…** writes every group's gates as a Gating-ML 2.0
+   file, the standard most flow cytometry software reads.
    Editing a polygon: drag a corner; click a side to add a corner; click a corner to select it,
    **Del** deletes it; drag inside to move the gate. **+ Polygon**: click its corners (a click
    outside the plot puts the corner on its edge: the gate then takes the events piled there,
@@ -63,13 +66,17 @@ wrong (✗ ⚠).
    its **values** as bars. The legend goes below, above or right of the figure, in the grid at
    its place in the list, in each panel, or nowhere. Select the first line for the whole
    figure's options, a panel for its own (they override the figure's, ↺ undoes that): style,
-   fonts (titles, axis labels, ticks, legend, ranges), line width, fills; the figure's size
+   fonts (titles, axis labels, ticks, legend, ranges), line widths (data, axes), fills; the
+   figure's size
    (panel width and height, the width at most — panels then go on the next row), background
    (white or transparent), and each series' colour and dashes. **style ▸ Apply**: a set of
    them at once (colour, black & white, offset, one column 85 mm, large for slides).
-   *Options ▸ Figure* sets which options are listed. On the right, the figure as exported:
+   *Options ▸ Figure options* sets which options are listed. In the middle, the layout as
+   boxes: click one to select it, drag a panel onto another's place, the legend above, below,
+   right of the figure or into the grid. On the right, the figure as exported:
    wheel to zoom, drag to move, double-click to fit, **100 %** for its real size, a checker
-   behind it (shows a transparent background); click a panel to select it; **Ctrl+C** copies
+   behind it (shows a transparent background), **res** 1–5× (the panels larger, the text as
+   set; *export* ticked: the exports too); click a panel to select it; **Ctrl+C** copies
    it. **Save…** PNG / TIFF (dpi) or SVG / PDF (text stays text), **Colour + B&W…** both at once.
 4. **Results** — the figure's table (group, label, sub-population, events, value, ÷ control),
    or every sample and population (count, % of parent, geometric mean, median, mean, CV). The
@@ -87,11 +94,16 @@ wrong (✗ ⚠).
 channels and populations (*FL2-A :: PE-A* → *anti-His PE*); remembered for the next
 experiments with the same names.
 
-**Options ▾**: the sample columns shown; the channels offered (by default FSC-A, SSC-A and the
-areas of the fluorochromes the reagents name — heights and other detectors hidden; a channel a
-gate is on is always offered); the figure options listed.
+**Options…**: a page per topic — the sample columns shown; the channels offered (by default
+FSC-A, SSC-A and the areas of the fluorochromes the reagents name — heights and other
+detectors hidden; a channel a gate is on is always offered); the figure options listed.
 
-**Report… (Ctrl+P)**: tick the sections, drag them in order, then PDF, HTML or Excel.
+**Report… (Ctrl+P)**: the sections on the left (tick them, drag them in order), the report as
+it reads on the right; then PDF, HTML or Excel. *Files* lists each FCS file on a line (name,
+folder, last modified, SHA-256), and the gates' file while the gates are as in it.
+
+Numbers are written with a decimal point whatever the system's language; the mouse wheel
+scrolls past the lists and number boxes, it never changes them.
 
 **Ctrl+S** saves the experiment as one `.json` (the files are found again from where it is, if
 the folder moves with them); **Ctrl+Z / Ctrl+Y** undo, redo.
@@ -109,8 +121,10 @@ The version is in the window title and on every report.
 - **÷ control**: the value over the group's negative control's (else the secondary-only,
   else the unstained), its main population.
 - **Histograms**: 256 channels over the log scale, smoothed over a few channels when
-  *smoothed* is ticked; *% of max* (the default, "normalised to mode") scales each to its own
-  peak, so samples with different event numbers compare — the table gives the events.
+  *smoothed* is ticked; *% of max* (the figure's default, "normalised to mode") scales each
+  to its own peak, so samples with different event numbers compare — the table gives the
+  events; *% of events* makes each histogram's area 100 % (fair when the peaks' widths
+  differ).
 
 Checked against FlowJo on the example runs: events per gate within 1.1 %, geometric means
 within 0.2 %. FlowJo is a trademark of Becton, Dickinson and Company; QuickFlow only reads

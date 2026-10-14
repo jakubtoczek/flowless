@@ -1,7 +1,7 @@
-"""The Figure tab: the figure's items on the left (panels and the legend: + to add one,
-drag to order them), the options of the figure - or of the selected panel, which then
-override the figure's - and the figure itself on the right, as it is exported. Widgets
-only: the figure is plots.figure().
+"""The Figure tab: the figure's items on the left (panels and the legend: + to add one)
+over the options of the figure - or of the selected panel, which then override the
+figure's -; in the middle the layout as boxes (click to select, drag to arrange); on the
+right the figure itself, as it is exported. Widgets only: the figure is plots.figure().
 """
 
 from __future__ import annotations
@@ -10,19 +10,152 @@ import copy
 import time
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction, QColor, QKeySequence
+from PySide6.QtCore import QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import QAction, QColor, QKeySequence, QPainter, QPen
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QColorDialog, QComboBox,
                                QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox,
                                QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-                               QPushButton, QScrollArea, QSpinBox, QSplitter, QToolButton,
-                               QVBoxLayout, QWidget)
+                               QPushButton, QScrollArea, QSlider, QSpinBox, QSplitter,
+                               QToolButton, QVBoxLayout, QWidget)
 
 from . import plots
-from .canvas import FigureView, copy_figure
+from .app import guard_wheel
+from .canvas import FOCUS, FigureView, copy_figure
 from .gating import GroupList
 
 FIGURE = "▣  The figure — every panel"
+ACCENT = "#4a9782"
+
+
+class Schematic(QWidget):
+    """The figure's layout as boxes, in its proportions: click one to select it (outside
+    them: the whole figure), drag a panel onto another's place, the legend above, below or
+    right of the figure or into the grid. Del removes the selected panel."""
+
+    picked = Signal(int)                 # an index in panels(); -1: the figure
+    moved = Signal(int, int)             # item, onto item's place
+    legend = Signal(str, int)            # place, item whose place it takes (grid) or -1
+    M = 30                               # px around the figure: the legend's drop zones
+
+    def __init__(self):
+        super().__init__()
+        self.cells, self.texts, self.size_mm = [], {}, (1.0, 1.0)
+        self.legend_i, self.place, self.sel = None, "bottom", -1
+        self.press = self.drag = None
+        self.setMinimumSize(180, 160)
+        self.setFocusPolicy(Qt.StrongFocus)
+
+    def set_layout(self, cells, texts, size_mm, legend_i, place, sel):
+        self.cells, self.texts, self.size_mm = list(cells), texts, size_mm
+        self.legend_i, self.place, self.sel = legend_i, place, sel
+        self.update()
+
+    def _frame(self) -> QRectF:
+        m, (W, H) = self.M, self.size_mm
+        a = QRectF(self.rect()).adjusted(m, m, -m, -m - 26)       # 26: the legend chip
+        k = min(a.width() / max(W, 1), a.height() / max(H, 1))
+        return QRectF(a.center().x() - W * k / 2, a.center().y() - H * k / 2, W * k, H * k)
+
+    def _boxes(self) -> list[tuple[int, QRectF]]:
+        f = self._frame()
+        out = [(i, QRectF(f.left() + x0 * f.width(), f.top() + (1 - y1) * f.height(),
+                          (x1 - x0) * f.width(), (y1 - y0) * f.height()).adjusted(2, 2, -2, -2))
+               for i, (x0, y0, x1, y1) in self.cells]
+        for _, r in out:                     # a legend band above / below: readable
+            if r.height() < 18:
+                if r.center().y() < f.center().y():
+                    r.setTop(r.bottom() - 18)
+                else:
+                    r.setBottom(r.top() + 18)
+        if self.legend_i is not None and all(i != self.legend_i for i, _ in out):
+            out.append((self.legend_i, QRectF(f.center().x() - 90, self.height() - 26, 180, 22)))
+        return out
+
+    def _zones(self) -> dict[str, QRectF]:
+        f, m = self._frame(), self.M
+        return {"top": QRectF(f.left(), f.top() - m, f.width(), m - 2),
+                "bottom": QRectF(f.left(), f.bottom() + 2, f.width(), m - 2),
+                "right": QRectF(f.right() + 2, f.top(), m - 2, f.height())}
+
+    def _at(self, pos) -> int | None:
+        return next((i for i, r in self._boxes() if r.contains(pos)), None)
+
+    def _target(self, pos):
+        """Where the dragged item would go: ("legend", place, item) | ("move", item)."""
+        i = self.drag[0]
+        if i == self.legend_i:
+            for place, r in self._zones().items():
+                if r.contains(pos):
+                    return ("legend", place, -1)
+        grid = {j for j, _ in self.cells if j != self.legend_i or self.place == "grid"}
+        j = next((j for j, r in self._boxes() if r.contains(pos) and j in grid and j != i), None)
+        if j is None:
+            return None
+        return ("legend", "grid", j) if i == self.legend_i else ("move", j)
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        f = self._frame()
+        p.fillRect(self.rect(), QColor("#262626"))
+        p.fillRect(f, QColor("#323232"))
+        if not self.cells and self.legend_i is None:
+            p.setPen(QColor("#8d8d8d"))
+            p.drawText(self.rect(), Qt.AlignCenter, "nothing yet")
+            return
+        drag_to = self._target(self.drag[1]) if self.drag else None
+        if self.drag and self.drag[0] == self.legend_i:
+            p.setPen(QPen(QColor("#8d8d8d"), 1, Qt.DashLine))
+            for place, r in self._zones().items():
+                p.drawRect(r)
+                p.drawText(r, Qt.AlignCenter, {"top": "above", "bottom": "below",
+                                               "right": "right"}[place])
+        font = p.font()
+        font.setPointSizeF(8)
+        p.setFont(font)
+        for i, r in self._boxes():
+            leg, on = i == self.legend_i, i == self.sel
+            p.setBrush(QColor("#2f3d38" if leg else "#3d3d3d"))
+            p.setPen(QPen(FOCUS if on else QColor(ACCENT if leg else "#6a6a6a"), 2 if on else 1))
+            p.drawRoundedRect(r, 4, 4)
+            p.setPen(QColor("#e0e0e0"))
+            p.drawText(r.adjusted(4, 2, -4, -2), Qt.AlignCenter | Qt.TextWordWrap,
+                       self.texts.get(i, ""))
+        if drag_to:
+            r = self._zones()[drag_to[1]] if drag_to[0] == "legend" and drag_to[2] < 0 else                 dict(self._boxes())[drag_to[-1]]
+            p.setBrush(Qt.NoBrush)
+            p.setPen(QPen(FOCUS, 2, Qt.DashLine))
+            p.drawRect(r)
+        if self.drag:
+            src = dict(self._boxes())[self.drag[0]]
+            p.setOpacity(0.5)
+            p.setBrush(FOCUS)
+            p.setPen(Qt.NoPen)
+            p.drawRoundedRect(QRectF(src).translated(self.drag[1] - self.press[1]), 4, 4)
+
+    def mousePressEvent(self, e):
+        self.setFocus()
+        i = self._at(e.position())
+        self.press = (i, e.position()) if i is not None else None
+        if i is None:
+            self.picked.emit(-1)
+
+    def mouseMoveEvent(self, e):
+        if self.press and (self.drag or (e.position() - self.press[1]).manhattanLength() > 6):
+            self.drag = (self.press[0], e.position())
+            self.update()
+
+    def mouseReleaseEvent(self, e):
+        press, drag, self.press = self.press, self.drag, None
+        to = self._target(e.position()) if drag else None
+        self.drag = None
+        self.update()
+        if to and to[0] == "move":
+            self.moved.emit(drag[0], to[1])
+        elif to:
+            self.legend.emit(to[1], to[2])
+        elif press and not drag:
+            self.picked.emit(press[0])
 
 
 class FigureTab(QWidget):
@@ -44,6 +177,7 @@ class FigureTab(QWidget):
                                        "Select one for its options; the first line: the "
                                        "whole figure's.")
         self.items.setDragDropMode(QAbstractItemView.InternalMove)
+        self.items.setMaximumHeight(118)
         self.items.currentRowChanged.connect(self._selected)
         self.items.moved.connect(self._moved)
         self.items.addAction(QAction(self.items, shortcut=QKeySequence.Delete,
@@ -85,9 +219,9 @@ class FigureTab(QWidget):
         h.addWidget(self.preset, 1)
         h.addWidget(apply)
         sv.addLayout(h)
-        sv.addWidget(self.items, 1)
+        sv.addWidget(self.items)
         sv.addLayout(bar)
-        sv.addWidget(scroll, 2)
+        sv.addWidget(scroll, 1)
         sv.addLayout(exp_row)
 
         self.view = FigureView()
@@ -98,12 +232,21 @@ class FigureTab(QWidget):
         self.view.setToolTip("Wheel: zoom; drag: move; double-click: fit; click a panel for "
                              "its options; Ctrl+C copies the figure")
         self.zoom = QLabel("")
+        self.zoom.setMinimumWidth(46)
         self.checker = QCheckBox("checker", toolTip="a checker behind the figure: shows where "
                                                     "it is transparent")
         self.checker.setChecked(True)
         self.checker.toggled.connect(self._checker)
         self.size = QLabel("")
         self.size.setStyleSheet("color: #8d8d8d")
+        self.res = QSlider(Qt.Horizontal, minimum=10, maximum=50, value=10,
+                           toolTip="resolution: the panels this many times larger, the text "
+                                   "as set — more room for the data")
+        self.res.setFixedWidth(90)
+        self.res_label = QLabel("1.0×")
+        self.res.valueChanged.connect(self._res)
+        self.res_export = QCheckBox("export", toolTip="the exports and the copy at this "
+                                                      "resolution too")
         top = QHBoxLayout()
         for text, fn in (("Fit", self.view.fit), ("100 %", self.view.actual_size)):
             b = QToolButton(text=text)
@@ -111,6 +254,11 @@ class FigureTab(QWidget):
             top.addWidget(b)
         top.addWidget(self.zoom)
         top.addWidget(self.checker)
+        top.addSpacing(12)
+        top.addWidget(QLabel("res"))
+        top.addWidget(self.res)
+        top.addWidget(self.res_label)
+        top.addWidget(self.res_export)
         top.addStretch()
         top.addWidget(self.size)
         right = QWidget()
@@ -118,10 +266,24 @@ class FigureTab(QWidget):
         rv.setContentsMargins(0, 0, 0, 0)
         rv.addLayout(top)
         rv.addWidget(self.view, 1)
+        self.schema = Schematic()
+        self.schema.picked.connect(lambda i: self.items.setCurrentRow(i + 1))
+        self.schema.moved.connect(self._move_to)
+        self.schema.legend.connect(self._legend_to)
+        self.schema.addAction(QAction(self.schema, shortcut=QKeySequence.Delete,
+                                      triggered=self.remove, shortcutContext=Qt.WidgetShortcut))
+        mid = QWidget()
+        mv = QVBoxLayout(mid)
+        mv.setContentsMargins(0, 0, 0, 0)
+        cap = QLabel("Layout — click to select; drag a panel onto another's place, the legend "
+                     "to a side or into the grid", wordWrap=True)
+        cap.setStyleSheet("color: #8d8d8d")
+        mv.addWidget(cap)
+        mv.addWidget(self.schema, 1)
         split = QSplitter()
-        split.addWidget(side)
-        split.addWidget(right)
-        split.setSizes([360, 1000])
+        for w in (side, mid, right):
+            split.addWidget(w)
+        split.setSizes([340, 330, 760])
         QVBoxLayout(self).addWidget(split)
 
     # -- the figure's settings
@@ -179,6 +341,51 @@ class FigureTab(QWidget):
         self.sel = row - 1
         self.build_options()
         self._frame()
+        self.schema.sel = self.sel
+        self.schema.update()
+
+    def _move_to(self, i, j):
+        """Item *i* to item *j*'s place (j and those after it shift by one)."""
+        own = self._own_panels()
+        self._snap("order")
+        own.insert(j, own.pop(i))
+        self.sel = j
+        self._changed()
+        self.refresh()
+
+    def _legend_to(self, place, j):
+        self._snap("legend")
+        self.fig_dict().setdefault("options", {})["legend"] = place
+        own = self._own_panels()
+        li = next(k for k, p in enumerate(own) if p.get("kind") == "legend")
+        if j >= 0:
+            own.insert(j, own.pop(li))
+            li = j
+        self.sel = li
+        self._changed()
+        self.refresh()
+
+    def _box_text(self, p) -> str:
+        exp = self.win.exp
+        if p.get("kind") == "legend":
+            return "Legend"
+        ch = p.get("x") or (exp.marker if p.get("kind") != "dot" else "FSC-A")
+        what = exp.name("channel", ch) + (f" × {exp.name('channel', p.get('y') or 'SSC-A')}"
+                                          if p.get("kind") == "dot" else "")
+        return (f"{dict(plots.KINDS).get(p.get('kind'), p.get('kind'))}\n"
+                f"{p.get('title') or exp.name('group', p.get('group', ''))}\n{what}")
+
+    def _res(self, v):
+        self.res_label.setText(f"{v / 10:.1f}×")
+        self.timer.start()
+
+    def _scaled(self, export=False) -> dict:
+        """The sizes times the resolution (on screen; exports when ticked)."""
+        k = self.res.value() / 10
+        if k == 1 or (export and not self.res_export.isChecked()):
+            return {}
+        o = plots.options(self.win.exp)
+        return {key: o[key] * k for key in ("panel_w", "panel_h", "max_w")}
 
     def _moved(self):
         """The list as the drag left it: the figure's line first, the items in order."""
@@ -233,6 +440,7 @@ class FigureTab(QWidget):
                 f.addRow(plots.SPEC[key]["label"], self._widget(key, None))
             lay.addWidget(box)
             lay.addStretch()
+            guard_wheel(self.opt_box)
             return
         if p is not None:
             lay.addWidget(self._panel_box(p))
@@ -252,6 +460,7 @@ class FigureTab(QWidget):
         if p is None:
             lay.addWidget(self._series_box())
         lay.addStretch()
+        guard_wheel(self.opt_box)
 
     def _value(self, key, p):
         o = plots.options(self.win.exp)
@@ -482,10 +691,16 @@ class FigureTab(QWidget):
 
     # -- the picture
     def render(self):
-        self.fig = plots.figure(self.win.exp, self.fig)
+        scaled = self._scaled()
+        self.fig = plots.figure(self.win.exp, self.fig, style=scaled)
         self.view.set_figure(self.fig)
         self._frame()
-        w, h = plots.figure(self.win.exp, draw=False)
+        w, h = plots.figure(self.win.exp, draw=False, style=scaled)
+        items = self.panels()
+        li = next((k for k, p in enumerate(items) if p.get("kind") == "legend"), None)
+        self.schema.set_layout(self.fig.quickflow_cells,
+                               {k: self._box_text(p) for k, p in enumerate(items)}, (w, h), li,
+                               plots.options(self.win.exp)["legend"], self.sel)
         self.size.setText(f"{w:.0f} × {h:.0f} mm")
         self.zoom.setText(f"{self.view.zoom_percent():.0f} %")
 
@@ -494,7 +709,7 @@ class FigureTab(QWidget):
         self.view.viewport().update()
 
     def _write(self, path, style=None):
-        fig = plots.figure(self.win.exp, style=style)
+        fig = plots.figure(self.win.exp, style={**self._scaled(True), **(style or {})})
         clear = plots.options(self.win.exp)["background"] == "none"
         fig.savefig(path, dpi=self.dpi.value(), transparent=clear,
                     facecolor="none" if clear else "white",
@@ -527,5 +742,6 @@ class FigureTab(QWidget):
 
     def copy(self):
         clear = plots.options(self.win.exp)["background"] == "none"
-        copy_figure(plots.figure(self.win.exp), self.dpi.value(), clear)
+        copy_figure(plots.figure(self.win.exp, style=self._scaled(True)), self.dpi.value(),
+                    clear)
         self.win.log("✓ figure copied (paste it into PowerPoint, Word…)")

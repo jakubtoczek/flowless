@@ -122,6 +122,7 @@ class Experiment:
     aliases: dict = field(default_factory=dict)                  # kind -> {name: shown as}
     channels: list = field(default_factory=list)                 # shown; [] = auto
     path: str = ""                                                # where it was saved
+    gates_file: dict = field(default_factory=dict)    # {path, how, key}: the gates' file
 
     # -- groups and samples
     def groups(self) -> list[str]:
@@ -255,6 +256,20 @@ class Experiment:
             out += [g.name] + self.below(group, g.name)
         return out
 
+    def stray_ranges(self, group: str) -> dict[str, list[str]]:
+        """The ranges the figure and the values leave out (not below the main population),
+        by the top gate they hang from ("" : on all events)."""
+        used = set(self.below(group, self.main_population(group)))
+        by = {g.name: g for g in self.gates.get(group, [])}
+        out = {}
+        for g in by.values():
+            if g.kind == "range" and g.name not in used:
+                top = g
+                while top.parent in by:
+                    top = by[top.parent]
+                out.setdefault("" if top is g else top.name, []).append(g.name)
+        return out
+
     def control(self, group: str) -> Sample | None:
         for role in CONTROL_ORDER:
             for s in self.in_group(group):
@@ -294,6 +309,18 @@ class Experiment:
                              "own gate": pop in s.gates})
         return rows
 
+    def gates_key(self) -> str:
+        """A fingerprint of every gate (the groups' and the samples' own)."""
+        import hashlib
+        d = [{g: [asdict(x) for x in gs] for g, gs in self.gates.items()},
+             [(s.name, {k: asdict(v) for k, v in s.gates.items()}) for s in self.samples]]
+        return hashlib.sha256(json.dumps(d, sort_keys=True).encode()).hexdigest()[:16]
+
+    def gates_from(self) -> dict:
+        """The file the gates came from or went to, while they are still as there."""
+        f = self.gates_file
+        return f if f.get("key") == self.gates_key() and Path(f.get("path", "")).is_file()             else {}
+
     # -- file
     def to_dict(self) -> dict:
         base = Path(self.path).parent if self.path else None
@@ -310,7 +337,7 @@ class Experiment:
                 "samples": samples,
                 "gates": {g: [asdict(x) for x in gs] for g, gs in self.gates.items()},
                 "record": self.record, "figure": self.figure, "aliases": self.aliases,
-                "channels": self.channels}
+                "channels": self.channels, "gates_file": self.gates_file}
 
     def save(self, path) -> None:
         self.path = str(Path(path).resolve())
@@ -322,7 +349,8 @@ class Experiment:
         """The experiment, and what didn't come back (a file not found, one changed)."""
         e = cls(marker=d.get("marker", ""), stat=d.get("stat", "geometric mean"),
                 record=d.get("record", {}), figure=d.get("figure", {}),
-                aliases=d.get("aliases", {}), channels=d.get("channels", []), path=path)
+                aliases=d.get("aliases", {}), channels=d.get("channels", []), path=path,
+                gates_file=d.get("gates_file", {}))
         base = Path(path).parent if path else None
         problems = []
         for sd in d.get("samples", []):
@@ -367,15 +395,16 @@ def _is_fluo(ch: str, label: str) -> bool:
         not label.upper().startswith(("FSC", "SSC"))
 
 
+AUTO = "cells (auto)"
+
+
 def add_cells_gate(exp: Experiment, group: str, x: str, y: str, verts) -> str:
-    """A 'cells' polygon first in the group's tree; gates that were on all events go
-    under it."""
+    """A 'cells (auto)' polygon on all events, after the gates already there (beside
+    them, not around them: the main population stays the one it was)."""
     gs = exp.gates.setdefault(group, [])
-    name = "cells" if all(g.name != "cells" for g in gs) else "cells 2"
-    for g in gs:
-        if not g.parent:
-            g.parent = name
-    gs.insert(0, Gate(name, "", "polygon", x, y, verts))
+    names = {g.name for g in gs}
+    name = next(n for n in [AUTO] + [f"{AUTO} {i}" for i in range(2, 99)] if n not in names)
+    gs.append(Gate(name, "", "polygon", x, y, verts))
     return name
 
 
@@ -650,6 +679,8 @@ def self_check(data: Path) -> int:
     assert e.main_population("g") == "cells"
     e.gates["g"].insert(1, e.gates["g"].pop(2))
     assert e.main_population("g") == "singlets" and e.below("g", "cells") == ["singlets", "high"]
+    e2 = Experiment(gates={"g": [Gate("cells"), Gate("gate 1"), Gate("high", "gate 1", "range")]})
+    assert e2.stray_ranges("g") == {"gate 1": ["high"]}, e2.stray_ranges("g")
     # two clusters: the gate holds the big one, not half of the small one
     rng = np.random.default_rng(1)
     big = rng.normal([1.0e7, 2.0e6], [1.6e6, 5e5], (20000, 2))

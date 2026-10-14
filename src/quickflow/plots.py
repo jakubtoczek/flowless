@@ -35,6 +35,7 @@ GREYS = LinearSegmentedColormap.from_list("greys", ["#d9d9d9", "#8c8c8c", "#3a3a
 INK, MUTED = "#0b0b0b", "#52514e"
 PT = 25.4 / 72                                   # mm per point
 KINDS = [("histogram", "Histograms"), ("dot", "Dot plot"), ("bars", "Values (bars)")]
+Y_LABEL = {"mode": "% of max", "count": "Count", "area": "% of events / channel"}
 
 
 def _o(key, label, section, kind, default, scope="both", shown=True, **kw):
@@ -50,14 +51,18 @@ OPTIONS = [
     _o("layout", "histograms", "Style", "choice", "overlay",
        choices=[("overlaid", "overlay"), ("offset (one above the other)", "offset")]),
     _o("y", "y axis", "Style", "choice", "mode",
-       choices=[("% of max (normalised to mode)", "mode"), ("count", "count")],
+       choices=[("% of max (normalised to mode)", "mode"), ("count", "count"),
+                ("% of events (each area 100 %)", "area")],
        tip="% of max: each histogram scaled to its own peak - the usual overlay when the "
-           "samples' event numbers differ (the table gives the counts)"),
+           "samples' event numbers differ (the table gives the counts). % of events: each "
+           "histogram's area is its population, 100 % - fair when the peaks' widths differ"),
     _o("smooth", "smoothed", "Style", "check", True),
     _o("fill", "filled", "Style", "check", True),
     _o("fill_alpha", "fill opacity", "Style", "float", 0.30, lo=0, hi=1, step=0.05,
        shown=False),
-    _o("lw", "line width", "Style", "float", 1.1, lo=0.2, hi=6, step=0.1, suffix=" pt"),
+    _o("lw", "line width (data)", "Style", "float", 1.1, lo=0.2, hi=6, step=0.1, suffix=" pt"),
+    _o("axis_lw", "line width (axes)", "Style", "float", 0.6, lo=0.1, hi=4, step=0.1,
+       suffix=" pt", tip="the axes, their ticks and the range brackets"),
     _o("gates", "range gates", "Style", "check", True),
     _o("gate_lines", "range limits as dotted lines", "Style", "check", True, shown=False),
     _o("values", "value of each sample", "Style", "check", True,
@@ -95,19 +100,21 @@ SPEC = {o["key"]: o for o in OPTIONS}
 DEFAULTS = {o["key"]: o["default"] for o in OPTIONS}
 LEGEND_KEYS = ["legend", "legend_pt", "legend_cols"]
 PRESETS = {
-    "colour": dict(bw=False, layout="overlay", fill=True, fill_alpha=0.30, lw=1.1,
+    "colour": dict(bw=False, layout="overlay", fill=True, fill_alpha=0.30, lw=1.1, axis_lw=0.6,
                    title_pt=9.0, label_pt=8.0, tick_pt=7.0, gate_pt=7.0, legend_pt=7.5,
                    panel_w=60.0, panel_h=50.0, max_w=180.0),
-    "black & white": dict(bw=True, layout="overlay", fill=True, lw=1.0, title_pt=9.0,
+    "black & white": dict(bw=True, layout="overlay", fill=True, lw=1.0, axis_lw=0.6,
+                          title_pt=9.0,
                           label_pt=8.0, tick_pt=7.0, gate_pt=7.0, legend_pt=7.5,
                           panel_w=60.0, panel_h=50.0, max_w=180.0),
     "black & white, offset": dict(bw=True, layout="offset", fill=True, lw=1.0,
                                   panel_w=60.0, panel_h=60.0, max_w=180.0),
     "one column (85 mm)": dict(title_pt=7.5, label_pt=7.0, tick_pt=6.0, gate_pt=6.0,
-                               legend_pt=6.5, lw=0.9, panel_w=42.0, panel_h=36.0,
+                               legend_pt=6.5, lw=0.9, axis_lw=0.5, panel_w=42.0, panel_h=36.0,
                                max_w=85.0),
     "large (slides)": dict(title_pt=16.0, label_pt=14.0, tick_pt=12.0, gate_pt=12.0,
-                           legend_pt=13.0, lw=2.0, panel_w=110.0, panel_h=85.0, max_w=330.0),
+                           legend_pt=13.0, lw=2.0, axis_lw=1.2, panel_w=110.0, panel_h=85.0,
+                           max_w=330.0),
 }
 
 
@@ -228,6 +235,8 @@ def hist_axes(ax, exp, panel: dict, o: dict, styles: dict, only=None) -> None:
         x, h = model.histogram(s.fcs.data[ch][m], top or 1e7, smooth=o["smooth"])
         if o["y"] == "mode" and h.max():
             h = 100 * h / h.max()
+        elif o["y"] == "area" and h.sum():
+            h = 100 * h / h.sum()
         curves.append((s, x, h))
     title = panel.get("title") or exp.name("group", group)
     if not curves:
@@ -275,12 +284,21 @@ def hist_axes(ax, exp, panel: dict, o: dict, styles: dict, only=None) -> None:
         ax.spines["left"].set_visible(False)
     ax.tick_params(labelsize=o["tick_pt"])
     ax.set_xlabel(exp.name("channel", ch), fontsize=o["label_pt"])
-    ax.set_ylabel(("% of max" if o["y"] == "mode" else "Count") + (" (offset)" if step else ""),
+    ax.set_ylabel(Y_LABEL.get(o["y"], "Count") + (" (offset)" if step else ""),
                   fontsize=o["label_pt"])
     ax.set_title(title, fontsize=o["title_pt"], color=INK, pad=3)
+    _axis_lines(ax, o)
     if o["legend"] == "panel":
         ax.legend(frameon=False, loc="upper left", fontsize=o["legend_pt"],
                   handlelength=2.2, borderaxespad=0.2)
+
+
+def _axis_lines(ax, o: dict) -> None:
+    w = o["axis_lw"]
+    for sp in ax.spines.values():
+        sp.set_linewidth(w)
+    ax.tick_params(which="major", width=w)
+    ax.tick_params(which="minor", width=w * 0.67)
 
 
 def model_ranges(exp, group, pop, ch, sample=None) -> list:
@@ -313,11 +331,11 @@ def _ranges(ax, exp, gates, o, data_top, x0, x1) -> float:
     band = frac * top
     for g, lo, hi, r in placed:
         y = data_top + band * (r + 0.3)
-        tick = band * 0.18
-        ax.plot([lo, hi], [y, y], color=INK, lw=0.8, solid_capstyle="butt", zorder=30,
+        tick, lw = band * 0.18, o["axis_lw"] * 1.3
+        ax.plot([lo, hi], [y, y], color=INK, lw=lw, solid_capstyle="butt", zorder=30,
                 clip_on=False)
-        ax.plot([lo, lo], [y - tick, y + tick], color=INK, lw=0.8, zorder=30, clip_on=False)
-        ax.plot([hi, hi], [y - tick, y + tick], color=INK, lw=0.8, zorder=30, clip_on=False)
+        ax.plot([lo, lo], [y - tick, y + tick], color=INK, lw=lw, zorder=30, clip_on=False)
+        ax.plot([hi, hi], [y - tick, y + tick], color=INK, lw=lw, zorder=30, clip_on=False)
         ax.text(math.sqrt(lo * hi), y + tick * 0.6, exp.name("population", g.name),
                 ha="center", va="bottom",
                 fontsize=o["gate_pt"], color=INK, zorder=30)
@@ -374,6 +392,7 @@ def dot_axes(ax, exp, samples: list, x: str, y: str, parent: str = "", gates=Non
     ax.set_xlabel(exp.name("channel", x) + sx, fontsize=o["label_pt"])
     ax.set_ylabel(exp.name("channel", y) + sy, fontsize=o["label_pt"])
     ax.tick_params(labelsize=o["tick_pt"])
+    _axis_lines(ax, o)
     if title:
         ax.set_title(title, fontsize=o["title_pt"], color=INK, pad=3)
     n = len(X)
@@ -434,6 +453,7 @@ def bars_axes(ax, exp, panel: dict, o: dict, styles: dict) -> None:
     ax.tick_params(labelsize=o["tick_pt"])
     ax.set_ylabel(f"{exp.stat}, {exp.name('channel', ch)}", fontsize=o["label_pt"])
     ax.set_title(title, fontsize=o["title_pt"], color=INK, pad=3)
+    _axis_lines(ax, o)
 
 
 def model_num(v) -> str:

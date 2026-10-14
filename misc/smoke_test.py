@@ -59,7 +59,9 @@ def main(argv) -> int:
     w.open_paths([run])
     exp = w.exp
     assert exp.groups() == ["OVCAR", "PC3"], exp.groups()
-    assert all(exp.gates.get(g) for g in exp.groups()), "auto 'cells' gate on every group"
+    assert all(exp.gates[g][0].name == model.AUTO for g in exp.groups()), "auto gate per group"
+    from PySide6.QtWidgets import QDoubleSpinBox
+    assert QDoubleSpinBox().textFromValue(1.5) == "1.50", "a point, whatever the system's locale"
     roles = {(s.group, s.label): s.role for s in exp.samples}
     assert roles[("PC3", "R3B23")] == "negative control", roles
     assert roles[("PC3", "AcII only")] == "secondary only"
@@ -75,6 +77,9 @@ def main(argv) -> int:
     shot("1_samples")
 
     w.open_paths([run / "29-Jun-2026.wsp"])            # the workspace's gates replace the auto ones
+    assert w.exp.gates_from().get("how") == "imported", w.exp.gates_file
+    text, _ = report.build(w.exp, ["files"])
+    assert "29-Jun-2026.wsp — the gates, imported" in text and "PC3_unstained" in text, text[-800:]
     vals = {(r["group"], r["label"]): r["value"] for r in report.summary_rows(w.exp)}
     assert abs(vals[("PC3", "29A1")] - 70543) / 70543 < 0.005, vals
     assert abs(vals[("PC3", "R3B23")] - 3854) / 3854 < 0.005, vals
@@ -98,6 +103,70 @@ def main(argv) -> int:
         mouse("button_release_event", xy, **kw)
 
     g.dot.draw()
+    n0 = len(g.gates())
+    # the editor's markers stay out of the tight layout: the plot keeps its size (4.png)
+    g.pop = g.gates()[0].name
+    g.fill_tree()
+    g.draw()
+    sizes = []
+    for wd in (700, 500, 700, 500, 700):
+        g.dot.resize(wd, 500)
+        a.processEvents()
+        g.dot.draw()
+        sizes.append(tuple(round(v, 3) for v in g.ax1.get_position().bounds))
+    assert sizes[0] == sizes[2] == sizes[4], sizes
+    # the auto gate on all events: a new gate beside the others, not around them
+    g.pop = model.ALL
+    g.fill_tree()
+    before = [(x.name, x.parent) for x in g.gates()]
+    g.auto()
+    after = [(x.name, x.parent) for x in w.exp.gates[g.group]]
+    assert after[:-1] == before and after[-1] == (model.AUTO, ""), after
+    w.do_undo()
+    g = w.gating_tab
+    # the histogram's y axis: count by default, % of events adds up to 100
+    assert g.ny.currentData() == "count" and g.ax2.get_ylabel() == "Count", g.ax2.get_ylabel()
+    g.ny.setCurrentIndex(g.ny.findData("area"))
+    assert g.ax2.get_ylabel().startswith("% of events"), g.ax2.get_ylabel()
+    ys = [ln.get_ydata() for ln in g.ax2.get_lines() if len(ln.get_ydata()) > 50]
+    assert ys and all(abs(sum(y) - 100) < 0.5 for y in ys), [sum(y) for y in ys]
+    g.ny.setCurrentIndex(g.ny.findData("count"))
+    # the wheel over a list leaves it as it is
+    from PySide6.QtCore import QPoint, QPointF
+    from PySide6.QtGui import QWheelEvent
+    i0 = g.ch.currentIndex()
+    ev = QWheelEvent(QPointF(5, 5), QPointF(5, 5), QPoint(0, 0), QPoint(0, -120), Qt.NoButton,
+                     Qt.NoModifier, Qt.NoScrollPhase, False)
+    a.sendEvent(g.ch, ev)
+    assert g.ch.currentIndex() == i0, "the wheel changed a list"
+    # gates exported as Gating-ML 2.0, nested; the report names the file while they're unchanged
+    from quickflow.imports import gatingml
+    import xml.etree.ElementTree as ET
+    g.new_range()
+    nx = gatingml.write(w.exp, out / "gates.xml")
+    root = ET.parse(out / "gates.xml").getroot()
+    G = "{http://www.isac-net.org/std/Gating-ML/v2.0/gating}"
+    kids = [e for e in root if e.tag in (G + "PolygonGate", G + "RectangleGate")]
+    assert nx == len(kids) == sum(len(v) for v in w.exp.gates.values()), (nx, len(kids))
+    assert any(e.get(G + "parent_id") for e in kids), "nested gates keep their parent"
+    poly = next(e for e in kids if e.tag == G + "PolygonGate")
+    assert len(poly.findall(G + "vertex")) >= 3
+    w.do_undo()
+    g = w.gating_tab
+    # a range under a polygon the figure doesn't use: said, and one click uses it
+    gs = w.exp.gates[g.group]
+    w.snap()
+    gs.append(model.Gate("gate 9", "", "polygon", "FSC-A", "SSC-A",
+                         [[1e5, 1e5], [1.6e7, 1e5], [1.6e7, 1.6e7]]))
+    gs.append(model.Gate("hi 9", "gate 9", "range", "FL2-A", lo=1e4))
+    w.changed()
+    g = w.gating_tab
+    assert g.warn.isVisibleTo(g) and "hi 9" in g.warn.text(), g.warn.text()
+    g._use(str(len(gs) - 2))
+    assert w.exp.main_population(g.group) == "gate 9" and not g.warn.isVisibleTo(g)
+    w.do_undo()
+    w.do_undo()
+    g = w.gating_tab
     n0 = len(g.gates())
     g.new_polygon()
     g.dot.draw()
@@ -166,6 +235,7 @@ def main(argv) -> int:
     assert first.name not in g.one().gates
 
     # the figure: panels, options, the preview
+    from quickflow import plots
     w.tabs.setCurrentIndex(2)
     f = w.figure_tab
     n = len(f.panels())
@@ -183,6 +253,26 @@ def main(argv) -> int:
     assert f.sel == 1, f.sel
     f._set("lw", 2.0, f.panels()[f.sel])
     assert f.panels()[1]["opts"]["lw"] == 2.0, "a panel's own option"
+    from PySide6.QtWidgets import QDoubleSpinBox
+    spins = f.opt_box.findChildren(QDoubleSpinBox)
+    assert spins and all("," not in x.text() for x in spins), [x.text() for x in spins]
+    f._set("axis_lw", 1.5, None)
+    f.render()
+    assert any(abs(sp.get_linewidth() - 1.5) < 1e-6 for ax in f.fig.axes for sp in ax.spines.values())
+    # the layout: boxes as the figure's cells; a panel onto another's place, the legend above
+    assert len(f.schema._boxes()) == len(f.panels()), (f.schema._boxes(), f.panels())
+    first = f.panels()[0]
+    f._move_to(0, 2)
+    assert f.panels()[2] is first or f.panels()[2] == first, "panel moved"
+    f.schema.picked.emit(1)
+    assert f.sel == 1 and f.items.currentRow() == 2, "the box picks the list's line"
+    f._legend_to("top", -1)
+    assert plots.options(w.exp)["legend"] == "top"
+    W0 = plots.figure(w.exp, draw=False)[0]
+    f.res.setValue(20)
+    f.render()
+    assert f.size.text().startswith(f"{2 * W0:.0f}"), (f.size.text(), W0)
+    f.res.setValue(10)
     shot("3_figure_panels")
     f.items.setCurrentRow(0)
     f.preset.setCurrentText("colour")
@@ -201,6 +291,21 @@ def main(argv) -> int:
     report.save_html(text, images, out / "report.html")
     qapp.to_pdf(text, images, out / "report.pdf")
     assert (out / "report.pdf").stat().st_size > 20000
+    rd = qapp.ReportDialog(w)
+    assert "SHA-256" in rd.view.toPlainText() and rd.list.count() == len(report.SECTIONS)
+    rd.list.item(0).setCheckState(Qt.Unchecked)
+    rd.refresh()
+    assert w.opts["report_off"] == [rd.list.item(0).data(Qt.UserRole)]
+    if shots:
+        rd.resize(1300, 850)
+        rd.grab().save(str(shots / "6_report.png"))
+    rd.close()
+    od = qapp.OptionsDialog(w)
+    assert od.topics.count() == 3
+    if shots:
+        od.topics.setCurrentRow(2)
+        od.grab().save(str(shots / "7_options.png"))
+    od.close()
     w.tabs.setCurrentIndex(0)
     w.samples_tab._sort(w.samples_tab.shown().index("label"))
     assert [s.label for s in w.exp.samples] == sorted([s.label for s in w.exp.samples],

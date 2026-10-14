@@ -4,6 +4,7 @@ files and its .json; these are best-effort readers kept apart, each in its modul
 flowjo   a FlowJo workspace (.wsp): its gates
 sheet    a procedure sheet (.xlsx, free-form as written at the bench): steps, reagents,
          each tube's condition
+gatingml the gates written as Gating-ML 2.0 (export only)
 """
 
 from __future__ import annotations

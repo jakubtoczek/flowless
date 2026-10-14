@@ -9,14 +9,18 @@ the aliases (▤) where one is given.
 from __future__ import annotations
 
 import datetime as _dt
+import functools
+import hashlib
 import html
 import io
+import os
 from pathlib import Path
 
 from . import __version__, fcs, model, plots, record
 
 SECTIONS = [("experiment", "Experiment"), ("figure", "Figure"), ("results", "Results"),
-            ("samples", "Samples"), ("procedure", "Procedure and reagents"),
+            ("samples", "Samples"), ("files", "Files"),
+            ("procedure", "Procedure and reagents"),
             ("gating", "Gating"), ("instrument", "Acquisition and instrument"),
             ("checklist", "MIFlowCyt checklist")]
 
@@ -28,6 +32,45 @@ def num(v, nd: int = 0) -> str:
     if isinstance(v, float) and nd:
         return f"{v:.{nd}f}"
     return f"{v:,.0f}".replace(",", " ")
+
+
+@functools.lru_cache(maxsize=None)
+def _sha256(path: str, mtime: float, size: int) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for b in iter(lambda: f.read(1 << 20), b""):
+            h.update(b)
+    return h.hexdigest()
+
+
+def file_info(path, base: str = "") -> list[str]:
+    """[name, folder (under *base*), modified, SHA-256's first 12 characters]."""
+    p = Path(path)
+    try:
+        st = p.stat()
+    except OSError:
+        return [p.name, str(p.parent), "not found", ""]
+    folder = os.path.relpath(p.parent, base) if base else str(p.parent)
+    return [p.name, "" if folder == "." else folder,
+            f"{_dt.datetime.fromtimestamp(st.st_mtime):%Y-%m-%d %H:%M}",
+            _sha256(str(p), st.st_mtime, st.st_size)[:12]]
+
+
+def files_table(exp: model.Experiment) -> tuple[str, list[list[str]]]:
+    """(the folder they share, a row per file): the FCS files, then the gates' file while
+    the gates are still as in it."""
+    paths = [s.path for s in exp.samples]
+    gf = exp.gates_from()
+    try:
+        base = os.path.commonpath([str(Path(x).parent) for x in paths + [gf.get("path")]
+                                   if x])
+    except ValueError:                                     # two drives
+        base = ""
+    rows = [file_info(x, base) for x in paths]
+    if gf:
+        r = file_info(gf["path"], base)
+        rows.append([f"{r[0]} — the gates, {gf['how']} (unchanged since)"] + r[1:])
+    return base, rows
 
 
 def summary_rows(exp: model.Experiment, rows: list[dict] | None = None) -> list[dict]:
@@ -53,7 +96,7 @@ def table(heads, rows, cls="") -> str:
     h = "".join(f"<th>{html.escape(str(x))}</th>" for x in heads)
     body = "".join("<tr>" + "".join(f"<td>{html.escape(str(c))}</td>" for c in r) + "</tr>"
                    for r in rows)
-    width = "" if cls == "kv" else ' width="100%"'
+    width = "" if {"kv", "files"} & set(cls.split()) else ' width="100%"'
     return (f'<table class="{cls}"{width} border="1" cellspacing="0" cellpadding="4">'
             f"<thead><tr>{h}</tr></thead><tbody>{body}</tbody></table>")
 
@@ -128,6 +171,12 @@ def build(exp: model.Experiment, sections=None, full_table: bool = False) -> tup
                   fcs.pick(s.fcs.meta, ("$WELLID",)), fcs.when(s.fcs.meta),
                   num(s.fcs.n), num(fcs.volume_ul(s.fcs.meta), 1)]
                  + [s.fields.get(k, "") for k in extra] for s in exp.samples], "small"))
+        elif key == "files":
+            base, frows = files_table(exp)
+            parts.append(f"<h2>{name}</h2>")
+            parts.append(f'<p class="note">{html.escape(base and "in " + base + " · ")}'
+                         "SHA-256: its first 12 characters</p>")
+            parts.append(table(["file", "folder", "modified", "SHA-256"], frows, "small files"))
         elif key == "procedure":
             parts.append(f"<h2>{name}</h2>")
             if rec["procedure"]:
@@ -177,6 +226,10 @@ def build(exp: model.Experiment, sections=None, full_table: bool = False) -> tup
     return _page(title, "\n".join(parts)), images
 
 
+Y_TEXT = {"mode": "% of each histogram’s maximum (normalised to mode)",
+          "area": "% of the population’s events per channel (each histogram’s area 100 %)"}
+
+
 def _figure_legend(exp) -> str:
     o = plots.options(exp)
     hist = [p for p in plots.panels(exp) if p.get("kind") == "histogram"]
@@ -185,7 +238,7 @@ def _figure_legend(exp) -> str:
     if not hist:
         return ""
     return (f"Histograms of {', '.join(sorted(chans))} on {', '.join(sorted(pops))}; "
-            f"{'% of each histogram’s maximum (normalised to mode)' if o['y'] == 'mode' else 'events per channel'}"
+            f"{Y_TEXT.get(o['y'], 'events per channel')}"
             f" (256 channels over the log scale{', smoothed' if o['smooth'] else ''}).")
 
 
@@ -206,7 +259,7 @@ h1 {{ font-size: 16pt; margin-bottom: 2pt; }} h2 {{ font-size: 12.5pt; margin-to
 table {{ border-collapse: collapse; font-size: 9pt; }}
 th, td {{ border: 1px solid #c3c2b7; padding: 3px 6px; text-align: left; }}
 th {{ background: #f0efec; }} table.kv th {{ display: none; }}
-table.small {{ font-size: 7.5pt; }}
+table.small {{ font-size: 7.5pt; }} table.files td {{ white-space: nowrap; }}
 </style></head><body>
 {body}
 </body></html>"""
@@ -254,10 +307,12 @@ def save_xlsx(exp: model.Experiment, path) -> None:
     sheet("Results", heads, [[N(h, r[h]) if h in ("group", "label", "sample", "population")
                               else r[h] for h in heads] for r in rows])
     extra = list(dict.fromkeys(k for s in exp.samples for k in s.fields))
-    sheet("Samples", ["group", "label", "role", "plot", "file", "folder", "well", "date", "start",
-                      "events", "volume µL", "acquisition s"] + extra,
+    sheet("Samples", ["group", "label", "role", "plot", "file", "folder", "modified",
+                      "SHA-256 (12)", "well", "date", "start", "events", "volume µL",
+                      "acquisition s"] + extra,
           [[N("group", s.group), N("label", s.label), s.role, s.plot, Path(s.path).name,
-            str(Path(s.path).parent), fcs.pick(s.fcs.meta, ("$WELLID",)),
+            str(Path(s.path).parent), *file_info(s.path)[2:],
+            fcs.pick(s.fcs.meta, ("$WELLID",)),
             fcs.pick(s.fcs.meta, ("$DATE",)), fcs.pick(s.fcs.meta, ("$BTIM",)), s.fcs.n,
             fcs.volume_ul(s.fcs.meta), fcs.acquired_s(s.fcs.meta)]
            + [s.fields.get(k, "") for k in extra] for s in exp.samples])

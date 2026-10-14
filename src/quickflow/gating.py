@@ -5,6 +5,7 @@ and the histogram, each its own plot, and the gate editors on them. Widgets only
 from __future__ import annotations
 
 import copy
+import html
 import math
 from pathlib import Path
 
@@ -13,7 +14,7 @@ from matplotlib.path import Path as Poly
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox,
-                               QHBoxLayout, QLabel, QListWidget, QMenu, QPushButton, QSplitter,
+                               QFileDialog, QHBoxLayout, QLabel, QListWidget, QMenu, QPushButton, QSplitter,
                                QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from . import model, plots
@@ -42,7 +43,9 @@ class PolyEditor:
         self.sel = sel if sel is not None and sel < len(self.v) else None
         self.drag = None
         self.cursor = None
-        kw = dict(animated=True, clip_on=False, zorder=50)
+        # in_layout=False: an empty marker sits at pixel (0, 0); in the tight layout it
+        # pushed the axes a little further in at every redraw (a splitter dragged: 4.png)
+        kw = dict(animated=True, clip_on=False, zorder=50, in_layout=False)
         self.line, = ax.plot([], [], color=EDIT, lw=1.5, **kw)
         self.pts, = ax.plot([], [], "o", ms=5, mfc=EDIT, mec="white", mew=0.8, **kw)
         self.hi, = ax.plot([], [], "o", ms=9, mfc="white", mec=EDIT, mew=1.8, **kw)
@@ -210,7 +213,7 @@ class RangeEditor:
         self.lims = lims                  # (x0, x1): the axis' ends
         self.on_change = on_change
         self.drag = None
-        kw = dict(animated=True, zorder=40)
+        kw = dict(animated=True, zorder=40, in_layout=False)
         self.span = ax.axvspan(1, 2, color=EDIT, alpha=0.15, lw=0, **kw)
         self.l1 = ax.axvline(1, color=EDIT, lw=1.6, **kw)
         self.l2 = ax.axvline(1, color=EDIT, lw=1.6, **kw)
@@ -342,7 +345,14 @@ class GatingTab(QWidget):
                                      "gate (edits change every sample without its own)")
         self.own.toggled.connect(self._own_toggled)
         self.cx, self.cy, self.ch = QComboBox(), QComboBox(), QComboBox()
-        for c in (self.cx, self.cy, self.ch):
+        self.ny = QComboBox(toolTip="count: events per channel; % of max: each histogram to "
+                                    "its peak; % of events: each histogram's area is 100 %")
+        for label, v in (("count", "count"), ("% of max", "mode"), ("% of events", "area")):
+            self.ny.addItem(label, v)
+        self.ny.setCurrentIndex(max(0, self.ny.findData(win.opts.get("gating_y", "count"))))
+        self.ny.currentIndexChanged.connect(
+            lambda _: win.opts.__setitem__("gating_y", self.ny.currentData()))
+        for c in (self.cx, self.cy, self.ch, self.ny):
             c.setSizeAdjustPolicy(QComboBox.AdjustToContents)
             c.currentIndexChanged.connect(lambda _: self.draw())
         self.dot = PlotCanvas(on_copy=lambda: win.log("✓ dot plot copied"))
@@ -353,6 +363,10 @@ class GatingTab(QWidget):
         self.hist.keyPressed.connect(self._hist_key)
         self.help = QLabel(wordWrap=True)
         self.help.setStyleSheet("color: #8d8d8d")
+        self.warn = QLabel(wordWrap=True, textFormat=Qt.RichText)
+        self.warn.setStyleSheet("color: #e0a040")
+        self.warn.linkActivated.connect(self._use)
+        self.warn.hide()
 
         left = QWidget()
         lv = QVBoxLayout(left)
@@ -361,9 +375,12 @@ class GatingTab(QWidget):
         lv.addWidget(self.groups, 1)
         lv.addWidget(QLabel("Populations"))
         lv.addWidget(self.tree, 2)
+        lv.addWidget(self.warn)
         h = QHBoxLayout()
-        for text, tip, fn in [("Auto gate", "a polygon around the main cluster of the group's "
-                                            "events on the dot plot's axes", self.auto),
+        for text, tip, fn in [("Auto gate", "the selected polygon redrawn around the main "
+                                            "cluster of the group's events; with all events "
+                                            "selected, a new 'cells (auto)' gate beside the "
+                                            "others", self.auto),
                               ("+ Polygon", "below the selected population: click its corners "
                                             "on the dot plot, then the first again", self.new_polygon),
                               ("+ Range", "on the histogram's channel, below the selected "
@@ -382,6 +399,10 @@ class GatingTab(QWidget):
         self.copy_menu.aboutToShow.connect(self._fill_copy_menu)
         cp.setMenu(self.copy_menu)
         h.addWidget(cp)
+        b = QPushButton("Export…", toolTip="every group's gates as a Gating-ML 2.0 file (the "
+                                           "standard most flow cytometry software reads)")
+        b.clicked.connect(self.export)
+        h.addWidget(b)
         lv.addLayout(h)
         lv.addWidget(QLabel("events of"))
         lv.addWidget(self.view)
@@ -402,7 +423,7 @@ class GatingTab(QWidget):
 
         plots_split = QSplitter()
         plots_split.addWidget(pane(self.dot, [("x", self.cx), ("y", self.cy)]))
-        plots_split.addWidget(pane(self.hist, [("channel", self.ch)]))
+        plots_split.addWidget(pane(self.hist, [("channel", self.ch), ("y", self.ny)]))
         plots_split.setChildrenCollapsible(False)
         right = QWidget()
         rv = QVBoxLayout(right)
@@ -532,6 +553,30 @@ class GatingTab(QWidget):
         self.tree.setCurrentItem(nodes.get(self.pop, root))
         self.tree.blockSignals(False)
         self._sync_own()
+        warn = []
+        for top, names in exp.stray_ranges(self.group).items():
+            them = ", ".join(names)
+            warn.append(f"⚠ {html.escape(them)}: under {html.escape(top or model.ALL)}, not "
+                        f"under {html.escape(main)} (bold) — the figure and the values leave "
+                        f"{'it' if len(names) == 1 else 'them'} out.")
+            if top and top not in chain:
+                i = [g.name for g in self.gates()].index(top)
+                warn[-1] += (f' <a href="{i}" style="color:#4a9782">Use '
+                             f"{html.escape(top)}</a> (puts it first).")
+        self.warn.setText("<br>".join(warn))
+        self.warn.setVisible(bool(warn))
+
+    def _use(self, i):
+        """Gate *i* (a link's text) first among the group's: the population the figure
+        uses."""
+        gs = self.gates()
+        g = gs[int(i)]
+        name = g.name
+        self.win.snap()
+        gs.remove(g)
+        gs.insert(0, g)
+        self.win.changed()
+        self.win.log(f"✓ {self.group}: the figure and the values use {name} now")
 
     def _sync_own(self):
         s, g = self.one(), self.gate()
@@ -677,7 +722,8 @@ class GatingTab(QWidget):
         one = self.one()
         x, y = self.cx.currentData(), self.cy.currentData()
         o = {**plots.options(exp), "legend": "panel", "layout": "overlay", "title_pt": 9,
-             "label_pt": 8.5, "tick_pt": 7.5, "legend_pt": 7.5, "gate_pt": 7.5, "fill": False}
+             "label_pt": 8.5, "tick_pt": 7.5, "legend_pt": 7.5, "gate_pt": 7.5, "fill": False,
+             "y": self.ny.currentData() or "count"}
         # the dot plot: the selected polygon's parent on its axes, else the selected
         # population's events with its polygons below
         editing = g is not None and g.kind == "polygon" and (g.x, g.y) == (x, y)
@@ -849,6 +895,27 @@ class GatingTab(QWidget):
         self.pop = g.parent or model.ALL
         self.win.changed()
         self.win.log(f"✓ deleted {', '.join(sorted(gone))} (Ctrl+Z brings it back)")
+
+    def export(self):
+        from .imports import gatingml
+
+        exp = self.win.exp
+        if not any(exp.gates.values()):
+            self.win.log("✗ no gate to export")
+            return
+        p, _ = QFileDialog.getSaveFileName(
+            self, "Export the gates", str(Path(self.win.opts.get("last_dir") or Path.home())
+                                          / (self.win.stem() + "_gates.xml")),
+            "Gating-ML 2.0 (*.xml)")
+        if not p:
+            return
+        n = gatingml.write(exp, p)
+        exp.gates_file = {"path": str(Path(p).resolve()), "how": "exported",
+                          "key": exp.gates_key()}
+        self.win.set_dirty()
+        own = sum(len(s.gates) for s in exp.samples)
+        self.win.log(f"✓ {n} gates exported: {p}" + (f" (not the {own} samples' own versions)"
+                                                    if own else ""))
 
     def _fill_copy_menu(self):
         m = self.copy_menu
