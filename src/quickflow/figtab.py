@@ -29,6 +29,18 @@ ACCENT = "#4a9782"
 MARK = QColor("#6fb0ff")                   # where a dragged box goes
 
 
+class Num(QDoubleSpinBox):
+    """A number to two decimals (0.75 can be typed), shown with no more than it needs
+    (1.1, 60.0, 0.75); the arrows step as set."""
+
+    def __init__(self, **kw):
+        super().__init__(decimals=2, **kw)
+
+    def textFromValue(self, v):
+        t = f"{v:.2f}"
+        return t[:-1] if t.endswith("0") else t
+
+
 class Schematic(QWidget):
     """The figure's layout as boxes, in its proportions (from the render, so they can't
     disagree with it). Click a box to select it (elsewhere: the whole figure), right-click
@@ -618,6 +630,7 @@ class FigureTab(QWidget):
         sections = {}
         for spec in plots.OPTIONS:
             if spec["key"] not in visible or spec["bar"] or \
+                    spec["key"] in plots.LEGEND_KEYS[2:] or \
                     (p is not None and spec["scope"] != "both"):
                 continue
             if spec["section"] not in sections:
@@ -655,8 +668,7 @@ class FigureTab(QWidget):
             w.setCurrentIndex(max(0, w.findData(val)))
             w.currentIndexChanged.connect(lambda _: self._set(key, w.currentData(), p))
         elif kind == "float":
-            w = QDoubleSpinBox(decimals=2 if spec.get("step", 1) < 0.1 else 1,
-                               singleStep=spec.get("step", 1), suffix=spec.get("suffix", ""))
+            w = Num(singleStep=spec.get("step", 1), suffix=spec.get("suffix", ""))
             w.setRange(spec["lo"], spec["hi"])
             w.setValue(float(val))
             w.valueChanged.connect(lambda v: self._set(key, float(v), p))

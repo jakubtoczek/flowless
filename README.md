@@ -45,7 +45,12 @@ wrong (✗ ⚠).
 2. **Gating** — a group's populations, each a gate on its parent: a **polygon** on two
    channels (the dot plot) or a **range** on one (the histogram). **Drag the populations** to
    order or nest them: the figure and the values use the one in **bold** — the first gate, and
-   the first polygon below it (cells › singlets). Drag the groups to order them. A new group
+   the first polygon below it (cells › singlets). **Groups / samples**: a group shows all
+   its samples; expand it and pick one sample, or several (Ctrl, Shift), to see only those
+   (plots and counts). Drag the groups to order them. The dot plot's channels are picked
+   above it — FSC-A × SSC-A (cells), FSC-A × FSC-H (singlets), the pairs the group's gates
+   use, or *custom…* (any two channels) — and stay as picked when the group, the samples or
+   the population change; a gate on other channels says so, with a link to show them. A new group
    gets a *cells (auto)* gate (the main cluster on FSC × SSC; debris, the off-scale pile and a
    second cluster left out): check it. **Auto gate** redraws the selected polygon that way;
    with *All events* selected it adds a *cells (auto)* gate beside the others. A ⚠ under the
@@ -64,7 +69,7 @@ wrong (✗ ⚠).
    population), so the figure and the values use it: doublets (about twice the area for
    the same height) are left out. **+ Range** starts above 99 %
    of the negative control's events; drag its limits. **Del** deletes the selected population,
-   F2 renames it. *events of* shows one sample; **this sample's own gate** gives it its own
+   F2 renames it. With one sample picked, **this sample's own gate** gives it its own
    version of the selected gate (◆ in the tree), the group's being the default. Click a plot,
    **Ctrl+C** copies it.
 3. **Figure** — on the left, the figure's items: its panels and the legend. **+** adds a panel
@@ -73,7 +78,10 @@ wrong (✗ ⚠).
    its **values** as bars. The legend goes below, above or right of the figure, in the grid at
    its place in the list, in each panel, or nowhere. Select the first line for the whole
    figure's options, a panel for its own (they override the figure's, ↺ undoes that): style,
-   fonts (titles, axis labels, ticks, legend, ranges), line widths (data, axes), fills; the
+   fonts (titles, axis labels, ticks, legend, range labels — a title wider than its panel
+   goes on two lines, at its size), line widths (data, axes; numbers to two decimals: 0.75
+   can be typed), fills; the legend (select it): across left / centred / right with a
+   margin, up / down with an offset, line spacing, columns; the
    figure's size
    (panel width and height, the width at most — panels then go on the next row), background
    (white or transparent), and each series' colour and dashes. **style ▸ Apply**: a set of
@@ -94,7 +102,7 @@ wrong (✗ ⚠).
    **replicates** (runs pooled: each label's n, mean ± SD of the value and of ÷ control, each
    run's value),
    or every sample and population (count, % of parent, geometric mean, median, mean, CV). The
-   value and the channel measured are chosen here. **Copy** (Ctrl+C) pastes as a table in
+   value and the channel measured are chosen here. **⧉** (Ctrl+C) pastes as a table in
    Excel, Word or PowerPoint; **Export…** `.xlsx` (every sheet) or `.csv`; **Report…**.
 5. **Experiment** — what was done: title, date, operator, aim; each group's cells (cell line,
    transfection, treatment, detachment); the reagents (kind — *sample* for what is tested, as

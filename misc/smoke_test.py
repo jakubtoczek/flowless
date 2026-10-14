@@ -105,17 +105,31 @@ def main(argv) -> int:
 
     g.dot.draw()
     n0 = len(g.gates())
+    # the dot plot's channels: chosen in a list (two usual pairs, the gates' pairs, custom)
+    names = [g.axes.itemText(i) for i in range(g.axes.count())]
+    assert names[-1] == "custom…" and any("FSC-H" in n for n in names), names
+    assert not g.cx.isVisibleTo(g)
+    g.axes.setCurrentIndex(g.axes.count() - 1)
+    g._axes_picked(0)
+    assert g.cx.isVisibleTo(g) and g.cx.count() == len(w.exp.all_channels())
     # the editor's markers stay out of the tight layout: the plot keeps its size (4.png)
-    g.pop = g.gates()[0].name
+    first = g.gates()[0]
+    g.set_xy((first.x, first.y))
+    assert not g.cx.isVisibleTo(g), "a listed pair: the custom lists hidden"
+    g.pop = first.name
     g.fill_tree()
     g.draw()
+    assert g.editor is not None, "the gate on its axes: editable"
     sizes = []
+    g.dot.resize(700, 500)                             # the first resize: settled
+    a.processEvents()
+    g.dot.draw()
     for wd in (700, 500, 700, 500, 700):
         g.dot.resize(wd, 500)
         a.processEvents()
         g.dot.draw()
         sizes.append(tuple(round(v, 3) for v in g.ax1.get_position().bounds))
-    assert sizes[0] == sizes[2] == sizes[4], sizes
+    assert sizes[1] == sizes[3] and sizes[2] == sizes[4], sizes   # no creeping in
     # the auto gate on all events: a new gate beside the others, not around them
     g.pop = model.ALL
     g.fill_tree()
@@ -205,6 +219,8 @@ def main(argv) -> int:
     w.do_undo()
     w.do_undo()
     g = w.gating_tab
+    g.set_xy(("FSC-A", "SSC-A"))
+    g.dot.draw()
     n0 = len(g.gates())
     g.new_polygon()
     g.dot.draw()
@@ -258,7 +274,30 @@ def main(argv) -> int:
     w.do_undo()
     # a sample's own gate: it alone changes
     g = w.gating_tab
-    g.view.setCurrentIndex(1)
+    # Groups / samples: several samples of a group, then one; the axes stay as set
+    from PySide6.QtCore import QItemSelectionModel
+    t = g.groups
+    top = next(t.topLevelItem(i) for i in range(t.topLevelItemCount())
+               if t.topLevelItem(i).data(0, Qt.UserRole)[1] == g.group)
+    g.set_xy(("FSC-A", "FSC-H"))
+    t.clearSelection()
+    for i in (0, 1):
+        top.child(i).setSelected(True)
+    t.setCurrentItem(top.child(1), 0, QItemSelectionModel.NoUpdate)
+    a.processEvents()
+    assert len(g.samples()) == 2 and g.one() is None and not g.own.isEnabled(), g.picked
+    two = sum(int(w.exp.masks(s)[model.ALL].sum()) for s in g.samples())
+    assert g.tree.topLevelItem(0).text(2) == str(two), "the counts: those two samples"
+    g.pop = g.gates()[0].name
+    g.fill_tree()
+    g._pop_changed()
+    assert g.xy == ("FSC-A", "FSC-H"), "selecting a population keeps the plot's axes"
+    t.clearSelection()
+    top.child(0).setSelected(True)
+    t.setCurrentItem(top.child(0), 0, QItemSelectionModel.NoUpdate)
+    a.processEvents()
+    assert g.one() is not None and len(g.samples()) == 1
+    g.set_xy((g.gates()[0].x, g.gates()[0].y))
     first = g.gates()[0]
     g.pop = first.name
     g.fill_tree()
@@ -294,6 +333,10 @@ def main(argv) -> int:
     from PySide6.QtWidgets import QDoubleSpinBox, QSpinBox
     spins = f.opt_box.findChildren(QDoubleSpinBox)
     assert spins and all("," not in x.text() for x in spins), [x.text() for x in spins]
+    from quickflow.figtab import Num
+    n = Num(singleStep=0.1)
+    assert n.valueFromText("0.75") == 0.75 and n.textFromValue(1.1) == "1.1" and \
+        n.textFromValue(0.75) == "0.75"
     f._set("axis_lw", 1.5, None)
     f.render()
     assert any(abs(sp.get_linewidth() - 1.5) < 1e-6 for ax in f.fig.axes for sp in ax.spines.values())
@@ -345,6 +388,42 @@ def main(argv) -> int:
     f.render()
     assert f.size.text().startswith(f"{2 * W0:.0f}"), (f.size.text(), W0)
     f.res.setValue(10)
+    # titles keep their size (a long one wraps), a legend in the grid sits where set, x
+    # ticks thinned to what fits, the ranges' labels apart
+    for k, v in (("title_pt", 15.0), ("tick_pt", 12.0), ("panel_w", 40.0), ("legend", "grid"),
+                 ("legend_h", "left"), ("legend_dx", 5.0)):
+        f._set(k, v, None)
+    w.set_alias("group", w.exp.groups()[0], "a rather long name for this group",
+                remember=False)
+    gr = w.exp.groups()[0]
+    rng = w.exp.gates[gr]
+    pop = w.exp.main_population(gr)
+    rng += [model.Gate("a long range name", pop, "range", "FL2-A", lo=1e3, hi=1.5e3),
+            model.Gate("another long one", pop, "range", "FL2-A", lo=1.5e3, hi=2e3)]
+    fig = plots.figure(w.exp)
+    fig.canvas.draw()
+    titles = [ax.title for ax in fig.axes if ax.get_title()]
+    assert titles and all(t.get_fontsize() == 15.0 for t in titles), \
+        [(t.get_text(), t.get_fontsize()) for t in titles]
+    assert any("\n" in t.get_text() for t in titles), [t.get_text() for t in titles]
+    leg = fig.legends[0].get_window_extent()
+    li = next(i for i, p in enumerate(plots.panels(w.exp)) if p.get("kind") == "legend")
+    cx0 = dict(fig.quickflow_cells)[li][0] * fig.bbox.width
+    assert abs(leg.x0 - cx0 - 5 / 25.4 * fig.dpi) < 0.6 / 25.4 * fig.dpi, (leg.x0, cx0)
+    hax = next(ax for ax in fig.axes if ax.get_xscale() == "log")
+    shown = [t for t in hax.get_xticklabels() if t.get_text() and
+             hax.get_xlim()[0] <= t.get_position()[0] <= hax.get_xlim()[1]]
+    assert len(shown) < 8, [t.get_text() for t in shown]
+    labels = [t for ax in fig.axes for t in ax.texts if t.get_text() in
+              ("a long range name", "another long one")]
+    assert len(labels) == 2 and labels[0].get_position()[1] != labels[1].get_position()[1], \
+        "two labels wider than their ranges: one row each"
+    del rng[-2:]
+    w.do_undo()
+    for _ in range(6):
+        w.do_undo()
+    w.set_alias("group", gr, "", remember=False)
+    f.refresh()
     shot("3_figure_panels")
     f.items.setCurrentRow(0)
     f.preset.setCurrentText("colour")
@@ -372,7 +451,7 @@ def main(argv) -> int:
     g.singlets()
     assert w.exp.main_population(g.group) == model.SINGLETS, w.exp.gates[g.group]
     sg = next(x for x in w.exp.gates[g.group] if x.name == model.SINGLETS)
-    assert (sg.parent, sg.x, sg.y) == (main, "FSC-A", "FSC-H") and g.cy.currentData() == "FSC-H"
+    assert (sg.parent, sg.x, sg.y) == (main, "FSC-A", "FSC-H") and g.xy == ("FSC-A", "FSC-H")
     n_in = [r["% parent"] for r in w.exp.results() if r["population"] == model.SINGLETS]
     assert all(45 < x < 90 for x in n_in), n_in   # OVCAR's gate on FSC-H × SSC-H: ~40 % doublets
     w.do_undo()

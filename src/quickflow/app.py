@@ -547,11 +547,14 @@ class ResultsTab(QWidget):
         top.addWidget(QLabel("of"))
         top.addWidget(self.chan)
         top.addStretch()
-        for text, tip, fn in [("Copy", "Ctrl+C: paste into Excel, Word or PowerPoint as a "
-                                       "table", self.copy),
+        for text, tip, fn in [("⧉", "Copy the table (Ctrl+C: the selected rows, else all): "
+                                    "paste into Excel, Word or PowerPoint as a table",
+                               self.copy),
                               ("Export…", "Excel (every sheet) or CSV (this table)", self.export),
                               ("Report…", "PDF, HTML, PowerPoint or Excel (Ctrl+P)", win.report)]:
             b = QPushButton(text, toolTip=tip)
+            if text == "⧉":
+                b.setStyleSheet(f"font-size: 15px; color: {ACCENT}; padding: 0 10px")
             b.clicked.connect(fn)
             top.addWidget(b)
         v = QVBoxLayout(self)
@@ -1090,8 +1093,8 @@ class OptionsDialog(QDialog):
                   [o["key"] for o in plots.OPTIONS if o["shown"]])
         boxes = {}
         for o in plots.OPTIONS:
-            if o["bar"]:                      # set over the layout's boxes, always there
-                continue
+            if o["bar"] or o["key"] in plots.LEGEND_KEYS[2:]:   # always there: the layout's
+                continue                                        # bar, the legend's box
             if o["section"] not in boxes:
                 boxes[o["section"]] = QVBoxLayout(box := QGroupBox(o["section"]))
                 v.addWidget(box)

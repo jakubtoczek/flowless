@@ -312,6 +312,23 @@ class GroupList(QListWidget):
         self.moved.emit()
 
 
+class GroupTree(QTreeWidget):
+    """The groups, each with its samples (expand it): select a group for all its samples,
+    or one or several samples of it (Ctrl / Shift); drag a group to reorder them."""
+    moved = Signal()
+
+    def dropEvent(self, e):
+        it = self.currentItem()
+        target = self.itemAt(e.position().toPoint())
+        if it is None or it.parent() is not None or (target is not None and
+                                                      self.dropIndicatorPosition() ==
+                                                      QAbstractItemView.OnItem):
+            e.ignore()                                # samples stay in their group
+            return
+        super().dropEvent(e)
+        self.moved.emit()
+
+
 class GatingTab(QWidget):
     def __init__(self, win):
         super().__init__()
@@ -319,11 +336,21 @@ class GatingTab(QWidget):
         self.group = ""
         self.pop = model.ALL
         self.editor = None
-        self.groups = GroupList(toolTip="Drag to reorder the groups (the figure's and the "
-                                        "tables' order)")
+        self.picked: list[str] = []               # samples shown; [] : the whole group
+        self.xy = tuple(win.opts.get("gating_xy") or ("FSC-A", "SSC-A"))
+        self.groups = GroupTree(toolTip="A group: all its samples; expand it to pick one "
+                                        "sample, or several (Ctrl, Shift). Drag a group to "
+                                        "reorder them (the figure's and the tables' order)")
+        self.groups.setHeaderHidden(True)
+        self.groups.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.groups.setDragDropMode(QAbstractItemView.InternalMove)
-        self.groups.currentTextChanged.connect(self._group_changed)
+        self.groups.itemSelectionChanged.connect(self._picked)
         self.groups.moved.connect(self._groups_moved)
+        self.axes = QComboBox(toolTip="the dot plot's channels: cells on FSC-A × SSC-A, "
+                                      "singlets on FSC-A × FSC-H, the pairs the gates use, "
+                                      "or any two (custom)")
+        self.axes.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self.axes.activated.connect(self._axes_picked)
         self.tree = PopTree()
         self.tree.setHeaderLabels(["population", "% parent", "events"])
         self.tree.setDragDropMode(QAbstractItemView.InternalMove)
@@ -341,8 +368,6 @@ class GatingTab(QWidget):
         for key, fn in ((QKeySequence.Delete, self.delete), (QKeySequence.Copy, self.copy_tree)):
             self.tree.addAction(QAction(self.tree, shortcut=key, triggered=fn,
                                         shortcutContext=Qt.WidgetShortcut))
-        self.view = QComboBox(toolTip="whose events the plots and the counts show")
-        self.view.currentIndexChanged.connect(lambda _: self._view_changed())
         self.own = QCheckBox("this sample's own gate",
                              toolTip="ticked: the selected gate is this sample's own "
                                      "version (edits change it only); unticked: the group's "
@@ -356,7 +381,11 @@ class GatingTab(QWidget):
         self.ny.setCurrentIndex(max(0, self.ny.findData(win.opts.get("gating_y", "count"))))
         self.ny.currentIndexChanged.connect(
             lambda _: win.opts.__setitem__("gating_y", self.ny.currentData()))
-        for c in (self.cx, self.cy, self.ch, self.ny):
+        for c in (self.cx, self.cy):
+            c.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+            c.activated.connect(lambda _: self.set_xy((self.cx.currentData(),
+                                                       self.cy.currentData())))
+        for c in (self.ch, self.ny):
             c.setSizeAdjustPolicy(QComboBox.AdjustToContents)
             c.currentIndexChanged.connect(lambda _: self.draw())
         self.dot = PlotCanvas(on_copy=lambda: win.log("✓ dot plot copied"))
@@ -365,8 +394,9 @@ class GatingTab(QWidget):
         self.ax2 = self.hist.figure.add_subplot()
         self.dot.keyPressed.connect(self._dot_key)
         self.hist.keyPressed.connect(self._hist_key)
-        self.help = QLabel(wordWrap=True)
+        self.help = QLabel(wordWrap=True, textFormat=Qt.RichText)
         self.help.setStyleSheet("color: #8d8d8d")
+        self.help.linkActivated.connect(lambda xy: self.set_xy(tuple(xy.split("|"))))
         self.warn = QLabel(wordWrap=True, textFormat=Qt.RichText)
         self.warn.setStyleSheet("color: #e0a040")
         self.warn.linkActivated.connect(self._use)
@@ -375,7 +405,7 @@ class GatingTab(QWidget):
         left = QWidget()
         lv = QVBoxLayout(left)
         lv.setContentsMargins(0, 0, 0, 0)
-        lv.addWidget(QLabel("Groups"))
+        lv.addWidget(QLabel("Groups / samples"))
         lv.addWidget(self.groups, 1)
         lv.addWidget(QLabel("Populations"))
         lv.addWidget(self.tree, 2)
@@ -413,8 +443,6 @@ class GatingTab(QWidget):
         b.clicked.connect(self.export)
         h.addWidget(b)
         lv.addLayout(h)
-        lv.addWidget(QLabel("events of"))
-        lv.addWidget(self.view)
         lv.addWidget(self.own)
 
         def pane(canvas, combos):
@@ -423,7 +451,8 @@ class GatingTab(QWidget):
             v.setContentsMargins(0, 0, 0, 0)
             bar = QHBoxLayout()
             for lab, c in combos:
-                bar.addWidget(QLabel(lab))
+                if lab:
+                    bar.addWidget(lab if isinstance(lab, QLabel) else QLabel(lab))
                 bar.addWidget(c)
             bar.addStretch()
             v.addLayout(bar)
@@ -431,7 +460,9 @@ class GatingTab(QWidget):
             return w
 
         plots_split = QSplitter()
-        plots_split.addWidget(pane(self.dot, [("x", self.cx), ("y", self.cy)]))
+        self.x_label, self.y_label = QLabel("x"), QLabel("y")
+        plots_split.addWidget(pane(self.dot, [("", self.axes), (self.x_label, self.cx),
+                                              (self.y_label, self.cy)]))
         plots_split.addWidget(pane(self.hist, [("channel", self.ch), ("y", self.ny)]))
         plots_split.setChildrenCollapsible(False)
         right = QWidget()
@@ -454,13 +485,13 @@ class GatingTab(QWidget):
 
     def one(self) -> model.Sample | None:
         """The sample shown alone, if one is."""
-        ss = self.win.exp.in_group(self.group)
-        i = self.view.currentIndex() - 1
-        return ss[i] if 0 <= i < len(ss) else None
+        ss = self.samples()
+        return ss[0] if len(ss) == 1 and self.picked else None
 
     def samples(self) -> list[model.Sample]:
-        s = self.one()
-        return [s] if s else self.win.exp.in_group(self.group)
+        """The samples picked in the group, else all of them."""
+        ss = self.win.exp.in_group(self.group)
+        return [s for s in ss if s.name in self.picked] or ss
 
     def shown(self, g: model.Gate | None) -> model.Gate | None:
         """The version of *g* the plots show and the edits change."""
@@ -472,49 +503,118 @@ class GatingTab(QWidget):
     def refresh(self):
         exp = self.win.exp
         cur = self.group if self.group in exp.groups() else (exp.groups() or [""])[0]
-        self.groups.blockSignals(True)
-        self.groups.clear()
-        self.groups.addItems([g for g in exp.groups()])
-        for i, g in enumerate(exp.groups()):
-            self.groups.item(i).setToolTip(exp.name("group", g))
-        items = self.groups.findItems(cur, Qt.MatchExactly)
-        if items:
-            self.groups.setCurrentItem(items[0])
-        self.groups.blockSignals(False)
+        names = {s.name for s in exp.in_group(cur)}
+        self.picked = [n for n in self.picked if n in names] if cur == self.group else []
+        t = self.groups
+        t.blockSignals(True)
+        t.clear()
+        for g in exp.groups():
+            top = QTreeWidgetItem([exp.title(g)])
+            top.setData(0, Qt.UserRole, ("group", g))
+            top.setToolTip(0, g)
+            for s in exp.in_group(g):
+                it = QTreeWidgetItem([f"{exp.name('label', s.label)} — {Path(s.path).name}"])
+                it.setData(0, Qt.UserRole, ("sample", s.name))
+                it.setFlags(it.flags() & ~Qt.ItemIsDragEnabled & ~Qt.ItemIsDropEnabled)
+                top.addChild(it)
+            t.addTopLevelItem(top)
+            if g == cur:
+                kids = [top.child(i) for i in range(top.childCount())]
+                chosen = [k for k in kids if k.data(0, Qt.UserRole)[1] in self.picked]
+                for k in chosen or [top]:
+                    k.setSelected(True)
+                t.setCurrentItem((chosen or [top])[0])
+                if chosen:
+                    top.setExpanded(True)
+        t.blockSignals(False)
         chans = exp.shown_channels()
-        for c, want in ((self.cx, "FSC-A"), (self.cy, "SSC-A"), (self.ch, exp.marker)):
-            keep = c.currentData()
-            c.blockSignals(True)
-            c.clear()
-            for ch in chans:
-                c.addItem(exp.name("channel", ch), ch)
-            i = c.findData(keep if keep in chans else want)
-            c.setCurrentIndex(max(0, i))
-            c.blockSignals(False)
+        c = self.ch
+        keep = c.currentData()
+        c.blockSignals(True)
+        c.clear()
+        for ch in chans:
+            c.addItem(exp.name("channel", ch), ch)
+        c.setCurrentIndex(max(0, c.findData(keep if keep in chans else exp.marker)))
+        c.blockSignals(False)
         self._set_group(cur)
 
-    def _group_changed(self, g):
-        if g:
-            self._set_group(g)
+    def _picked(self):
+        """The tree's selection: its current item's group, the samples of it selected."""
+        it = self.groups.currentItem()
+        if it is None:
+            return
+        top = it.parent() or it
+        g = top.data(0, Qt.UserRole)[1]
+        kids = [top.child(i) for i in range(top.childCount())]
+        self.picked = [k.data(0, Qt.UserRole)[1] for k in kids if k.isSelected()]
+        if top.isSelected() and it is top:
+            self.picked = []
+        self.groups.blockSignals(True)              # one group at a time
+        for i in range(self.groups.topLevelItemCount()):
+            other = self.groups.topLevelItem(i)
+            if other is not top:
+                other.setSelected(False)
+                for j in range(other.childCount()):
+                    other.child(j).setSelected(False)
+            elif self.picked:
+                other.setSelected(False)
+        self.groups.blockSignals(False)
+        self._set_group(g)
 
     def _set_group(self, g):
         self.group = g
-        self.view.blockSignals(True)
-        keep = self.view.currentText()
-        self.view.clear()
-        self.view.addItem("all samples of the group")
-        self.view.addItems([f"{self.win.exp.name('label', s.label)} — {Path(s.path).name}"
-                            for s in self.win.exp.in_group(g)])
-        self.view.setCurrentIndex(max(0, self.view.findText(keep)))
-        self.view.blockSignals(False)
-        if self.gate() is None:                    # a new group: its main gate, editable
+        if self.gate() is None:                    # another group: its main population
             self.pop = self.win.exp.main_population(g)
-            self._axes_to(self.gate())
+        self._fill_axes()
         self.fill_tree()
         self.draw()
 
-    def _view_changed(self):
-        self.fill_tree()
+    # -- the dot plot's channels: chosen, kept whatever is selected
+    PRESETS = [("FSC-A", "SSC-A"), ("FSC-A", "FSC-H")]
+
+    def _fill_axes(self):
+        exp = self.win.exp
+        have = set(exp.all_channels())
+        pairs = [p for p in self.PRESETS if set(p) <= have]
+        pairs += [(g.x, g.y) for g in self.gates() if g.kind == "polygon" and
+                  (g.x, g.y) not in pairs and {g.x, g.y} <= have]
+        a = self.axes
+        a.blockSignals(True)
+        a.clear()
+        for x, y in dict.fromkeys(pairs):
+            a.addItem(f"{exp.name('channel', x)} × {exp.name('channel', y)}", (x, y))
+        a.addItem("custom…", None)
+        listed = list(dict.fromkeys(pairs))          # (findData can't match a tuple)
+        a.setCurrentIndex(listed.index(tuple(self.xy)) if tuple(self.xy) in listed
+                          else a.count() - 1)
+        a.blockSignals(False)
+        custom = a.currentData() is None
+        for c, ch in ((self.cx, self.xy[0]), (self.cy, self.xy[1])):
+            c.blockSignals(True)
+            c.clear()
+            for k in exp.all_channels():
+                c.addItem(exp.name("channel", k), k)
+            c.setCurrentIndex(max(0, c.findData(ch)))
+            c.blockSignals(False)
+        for w in (self.cx, self.cy, self.x_label, self.y_label):
+            w.setVisible(custom)
+
+    def _axes_picked(self, _):
+        xy = self.axes.currentData()
+        if xy is None:                               # custom: the two lists, from here
+            for w in (self.cx, self.cy, self.x_label, self.y_label):
+                w.setVisible(True)
+            return
+        self.set_xy(xy)
+
+    def set_xy(self, xy):
+        """The dot plot on x × y, until changed here."""
+        xy = tuple(xy)
+        if not all(xy) or xy == tuple(self.xy) and self.axes.currentData() is not None:
+            return
+        self.xy = xy
+        self.win.opts["gating_xy"] = list(xy)
+        self._fill_axes()
         self.draw()
 
     def fill_tree(self):
@@ -613,23 +713,8 @@ class GatingTab(QWidget):
     def _pop_changed(self):
         it = self.tree.currentItem()
         self.pop = (it.data(0, Qt.UserRole) or model.ALL) if it else model.ALL
-        self._axes_to(self.gate())
         self._sync_own()
         self.draw()
-
-    def _axes_to(self, g):
-        """The plots on the selected gate's channels (all events: the first polygon's)."""
-        if g is None:
-            g = next((x for x in self.gates() if x.kind == "polygon"), None)
-        if g is None:
-            return
-        pairs = ((self.cx, g.x), (self.cy, g.y)) if g.kind == "polygon" else ((self.ch, g.x),)
-        for c, ch in pairs:
-            i = c.findData(ch)
-            if i >= 0:
-                c.blockSignals(True)
-                c.setCurrentIndex(i)
-                c.blockSignals(False)
 
     def _renamed(self, it, col):
         old = it.data(0, Qt.UserRole)
@@ -687,7 +772,11 @@ class GatingTab(QWidget):
         self.win.changed()
 
     def _groups_moved(self):
-        order = [self.groups.item(i).text() for i in range(self.groups.count())]
+        t = self.groups
+        order = [t.topLevelItem(i).data(0, Qt.UserRole)[1] for i in range(t.topLevelItemCount())]
+        if sorted(order) != sorted(self.win.exp.groups()):
+            self.refresh()
+            return
         if order == self.win.exp.groups():
             return
         self.win.snap()
@@ -745,7 +834,7 @@ class GatingTab(QWidget):
         shown = self.shown(g)
         ss = self.samples()
         one = self.one()
-        x, y = self.cx.currentData(), self.cy.currentData()
+        x, y = self.xy
         o = {**plots.options(exp), "legend": "panel", "layout": "overlay", "title_pt": 9,
              "label_pt": 8.5, "tick_pt": 7.5, "legend_pt": 7.5, "gate_pt": 7.5, "fill": False,
              "y": self.ny.currentData() or "count"}
@@ -762,14 +851,18 @@ class GatingTab(QWidget):
         if editing:
             self.editor = PolyEditor(self.dot, self.ax1, shown.vertices, self._lims(x, y),
                                      self._poly_done, self.delete, sel=sel)
-            who = f"{one.name}'s own" if one and g.name in one.gates else "the group's"
-            self.help.setText(
-                f"{g.name} ({who} gate): drag a corner; click a side to add a corner; click a "
+            who = f"{one.name}'s own gate" if one and g.name in one.gates else \
+                "the group's gate" + (f", shown on {len(ss)} of its samples"
+                                      if len(ss) < len(exp.in_group(self.group)) else "")
+            self.help.setText(html.escape(
+                f"{g.name} ({who}): drag a corner; click a side to add a corner; click a "
                 "corner then Del to delete it; drag inside to move the gate. A click outside "
                 "the plot puts the corner on its edge (the off-scale events piled there are "
-                "then in).")
+                "then in)."))
         elif g is not None and g.kind == "polygon":
-            self.help.setText(f"{g.name} is on {g.x} × {g.y}: set those axes to edit it.")
+            self.help.setText(f"{html.escape(g.name)} is on {html.escape(g.x)} × "
+                              f"{html.escape(g.y)}: <a href=\"{g.x}|{g.y}\" style=\"color:"
+                              f"#4a9782\">show those axes</a> to edit it.")
         else:
             self.help.setText("Select a population to edit its gate; + Polygon draws one below "
                               "the selected population on the dot plot's axes.")
@@ -779,7 +872,8 @@ class GatingTab(QWidget):
         panel = {"group": self.group, "x": ch, "population": hp}
         styles = plots.series_style(exp, o)
         plots.hist_axes(self.ax2, exp, panel, {**o, "gates": True}, styles, only=ss)
-        self.ax2.set_title(f"{exp.name('group', self.group)} › {hp}", fontsize=9)
+        self.ax2.set_title(f"{exp.title(self.group)} › {exp.name('population', hp)}",
+                           fontsize=9)
         if g is not None and g.kind == "range" and g.x == ch:
             top = max((s.fcs.range(ch) for s in ss if ch in s.fcs.data), default=0) or 1e7
             self.editor = RangeEditor(self.hist, self.ax2, shown.lo, shown.hi, (1.0, top),
@@ -835,8 +929,7 @@ class GatingTab(QWidget):
         if not self.group:
             return
         g = self.gate()
-        x, y = (g.x, g.y) if g is not None and g.kind == "polygon" else \
-            (self.cx.currentData(), self.cy.currentData())
+        x, y = (g.x, g.y) if g is not None and g.kind == "polygon" else self.xy
         v = model.auto_gate(self.win.exp.in_group(self.group), x, y)
         if not v:
             self.win.log("✗ auto gate: no cluster found on these axes")
@@ -856,7 +949,7 @@ class GatingTab(QWidget):
         names = {x.name for x in self.gates()}
         name = "cells" if not self.gates() else next(f"gate {i}" for i in range(1, 99)
                                                     if f"gate {i}" not in names)
-        x, y = self.cx.currentData(), self.cy.currentData()
+        x, y = self.xy
         if self.editor is not None:
             self.editor.disconnect()
         exp = self.win.exp
@@ -935,8 +1028,7 @@ class GatingTab(QWidget):
                                          "their ratio is cut, the gate takes them as on its "
                                          "edge" if sat > 5 else ""))
         self.win.changed()
-        self._axes_to(self.gate())                  # FSC-H is offered now: show the gate
-        self.draw()
+        self.set_xy(("FSC-A", "FSC-H"))              # the new gate's axes: show it
 
     def delete(self):
         g = self.gate()
