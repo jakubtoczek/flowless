@@ -261,7 +261,7 @@ def hist_axes(ax, exp, panel: dict, o: dict, styles: dict, only=None) -> None:
         elif o["y"] == "area" and h.sum():
             h = 100 * h / h.sum()
         curves.append((s, x, h))
-    title = panel.get("title") or exp.name("group", group)
+    title = panel.get("title") or exp.title(group)
     if not curves:
         ax.set_axis_off()
         ax.text(0.5, 0.5, f"{title}\nnothing to plot", ha="center", va="center",
@@ -309,7 +309,7 @@ def hist_axes(ax, exp, panel: dict, o: dict, styles: dict, only=None) -> None:
     ax.set_xlabel(exp.name("channel", ch), fontsize=o["label_pt"])
     ax.set_ylabel(Y_LABEL.get(o["y"], "Count") + (" (offset)" if step else ""),
                   fontsize=o["label_pt"])
-    ax.set_title(title, fontsize=o["title_pt"], color=INK, pad=3)
+    _title(ax, title, o)
     _axis_lines(ax, o)
     if o["legend"] == "panel":
         ax.legend(frameon=False, loc="upper left", fontsize=o["legend_pt"],
@@ -322,6 +322,16 @@ def _axis_lines(ax, o: dict) -> None:
         sp.set_linewidth(w)
     ax.tick_params(which="major", width=w)
     ax.tick_params(which="minor", width=w * 0.67)
+
+
+def _title(ax, title: str, o: dict) -> None:
+    """The panel's title, smaller when it is wider than the panel (a run's day after a long
+    name), to 60 % at most."""
+    fig = ax.figure
+    room = ax.get_position().width * fig.get_figwidth() * 72 + o["tick_pt"] * 4   # pt
+    need = len(title) * o["title_pt"] * 0.55
+    pt = o["title_pt"] * max(0.6, min(1.0, room / need)) if need else o["title_pt"]
+    ax.set_title(title, fontsize=pt, color=INK, pad=3)
 
 
 def model_ranges(exp, group, pop, ch, sample=None) -> list:
@@ -417,7 +427,7 @@ def dot_axes(ax, exp, samples: list, x: str, y: str, parent: str = "", gates=Non
     ax.tick_params(labelsize=o["tick_pt"])
     _axis_lines(ax, o)
     if title:
-        ax.set_title(title, fontsize=o["title_pt"], color=INK, pad=3)
+        _title(ax, title, o)
     n = len(X)
     for g in gates or []:
         if g.kind != "polygon" or len(g.vertices) < 3:
@@ -436,37 +446,59 @@ def dot_axes(ax, exp, samples: list, x: str, y: str, parent: str = "", gates=Non
 
 def bars_axes(ax, exp, panel: dict, o: dict, styles: dict) -> None:
     """The statistic of each of the panel's samples (the marker, the main population) as
-    bars on a log axis, the control first."""
+    bars on a log axis, the control first. A group with replicates (other groups shown
+    under its name: other runs): each label's mean over the runs, ± SD, each run a dot."""
     group = panel.get("group", "")
     ch = panel.get("x") or exp.marker
     pop = panel.get("population") or exp.main_population(group)
     key = model.STATS.get(exp.stat, "gmean")
     ss = sorted(panel_samples(exp, panel), key=lambda s: not styles.get(s.label, {}).get("ctrl"))
-    vals = []
-    for s in ss:
-        m = exp.masks(s).get(pop)
-        v = model.stats(s.fcs.data[ch][m])[key] if m is not None and ch in s.fcs.data else None
-        vals.append(v)
-    title = panel.get("title") or exp.name("group", group)
+    def value(s, p):
+        m = exp.masks(s).get(p)
+        return model.stats(s.fcs.data[ch][m])[key] if m is not None and ch in s.fcs.data \
+            else None
+
+    pool = exp.pool(group)
+    runs = [[value(s, pop)] for s in ss]
+    if len(pool) > 1:
+        for k, s in enumerate(ss):
+            for g in pool:
+                t = next((x for x in exp.in_group(g) if x.label == s.label and x.plot), None)
+                if g != group and t is not None:
+                    runs[k].append(value(t, measured(exp, g)))
+    runs = [[v for v in r if v] for r in runs]
+    vals = [float(np.mean(r)) if r else None for r in runs]
+    title = panel.get("title") or (f"{exp.name('group', group)} · {len(pool)} runs"
+                                   if len(pool) > 1 else exp.title(group))
     if not any(vals):
         ax.set_axis_off()
         ax.text(0.5, 0.5, f"{title}\nnothing to plot", ha="center", va="center",
                 transform=ax.transAxes, color=MUTED, fontsize=o["label_pt"])
         return
     bw = o["bw"]
+    floor = min([v for v in vals if v] + [x for r in runs for x in r]) / 3
     for i, (s, v) in enumerate(zip(ss, vals)):
         if not v:
             continue
         sty = styles.get(s.label) or {"edge": INK, "fill": None, "dash": "-", "ctrl": False}
         face = sty["fill"] if sty["fill"] else ("white" if bw else sty["edge"])
-        ax.bar(i, v, width=0.7, color=to_rgba(face, 1.0 if bw or sty["ctrl"] else 0.85),
+        ax.bar(i, v - floor, bottom=floor, width=0.7,       # from the axis' floor: log
+               color=to_rgba(face, 1.0 if bw or sty["ctrl"] else 0.85),
                edgecolor=sty["edge"], lw=0.7, ls=sty["dash"], zorder=3)
+        if len(runs[i]) > 1:                       # replicates: ± SD, each run a dot
+            sd = float(np.std(runs[i], ddof=1))
+            ax.errorbar(i, v, yerr=[[min(sd, v * 0.95)], [sd]], color=INK, lw=0.8,
+                        capsize=2.5, zorder=5)
+            ax.plot(i + np.linspace(-0.15, 0.15, len(runs[i])), runs[i], "o", ms=2.6,
+                    mfc="white", mec=INK, mew=0.6, zorder=6)
         if o["values"]:
-            ax.text(i, v * 1.12, model_num(v), ha="center", va="bottom", fontsize=o["gate_pt"],
-                    color=INK, zorder=4)
+            top = max([v + (float(np.std(runs[i], ddof=1)) if len(runs[i]) > 1 else 0)]
+                      + runs[i])
+            ax.text(i, top * 1.12, model_num(v), ha="center", va="bottom",
+                    fontsize=o["gate_pt"], color=INK, zorder=4)
     ax.set_yscale("log")
-    good = [v for v in vals if v]
-    ax.set_ylim(min(good) / 3, max(good) * (6 if o["values"] else 2))
+    good = [v for v in vals if v] + [x for r in runs for x in r]
+    ax.set_ylim(floor, max(good) * (6 if o["values"] else 2))
     ax.set_xticks(range(len(ss)))
     ax.set_xticklabels([exp.name("label", s.label) for s in ss], rotation=35, ha="right",
                        rotation_mode="anchor")
@@ -475,7 +507,7 @@ def bars_axes(ax, exp, panel: dict, o: dict, styles: dict) -> None:
         ax.spines[side].set_visible(False)
     ax.tick_params(labelsize=o["tick_pt"])
     ax.set_ylabel(f"{exp.stat}, {exp.name('channel', ch)}", fontsize=o["label_pt"])
-    ax.set_title(title, fontsize=o["title_pt"], color=INK, pad=3)
+    _title(ax, title, o)
     _axis_lines(ax, o)
 
 
@@ -583,7 +615,7 @@ def figure(exp, fig: Figure | None = None, draw: bool = True, style: dict | None
                 kids = [g for g in exp.children(p.get("group", ""), parent or model.ALL)
                         if g.kind == "polygon" and (g.x, g.y) == (x, y)]
                 dot_axes(ax, exp, ss, x, y, parent, kids, po,
-                         p.get("title") or exp.name("group", p.get("group", "")))
+                         p.get("title") or exp.title(p.get("group", "")))
             elif kind == "bars":
                 bars_axes(ax, exp, p, po, styles)
             else:

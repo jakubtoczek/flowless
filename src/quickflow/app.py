@@ -10,6 +10,7 @@ the rest it can.
 from __future__ import annotations
 
 import copy
+import html
 import json
 import threading
 from pathlib import Path
@@ -528,7 +529,8 @@ class ResultsTab(QWidget):
         super().__init__()
         self.win = win
         self.mode = QComboBox()
-        self.mode.addItems(["summary (the figure's table)", "every sample and population"])
+        self.mode.addItems(["summary (the figure's table)", "every sample and population",
+                            "replicates: runs pooled (groups shown under one name)"])
         self.mode.currentIndexChanged.connect(lambda _: self.refresh())
         self.stat = QComboBox(toolTip="the value of the summary, the bars and ÷ control")
         self.stat.addItems(list(model.STATS))
@@ -548,7 +550,7 @@ class ResultsTab(QWidget):
         for text, tip, fn in [("Copy", "Ctrl+C: paste into Excel, Word or PowerPoint as a "
                                        "table", self.copy),
                               ("Export…", "Excel (every sheet) or CSV (this table)", self.export),
-                              ("Report…", "PDF, HTML or Excel (Ctrl+P)", win.report)]:
+                              ("Report…", "PDF, HTML, PowerPoint or Excel (Ctrl+P)", win.report)]:
             b = QPushButton(text, toolTip=tip)
             b.clicked.connect(fn)
             top.addWidget(b)
@@ -579,15 +581,21 @@ class ResultsTab(QWidget):
         if self.mode.currentIndex() == 0:
             heads = ["group", "label", "sub-population", "events", "% parent", exp.stat,
                      "÷ control"]
-            return heads, [[exp.name("group", r["group"]), exp.name("label", r["label"]),
+            return heads, [[exp.title(r["group"]), exp.name("label", r["label"]),
                             exp.name("population", r["sub-population"]) or "—", r["count"],
                             r["% parent"], r["value"], r["÷ control"]]
                            for r in report.summary_rows(exp)]
+        if self.mode.currentIndex() == 2:
+            heads = ["group", "label", "sub-population", "runs", f"{exp.stat} mean", "SD",
+                     "÷ control mean", "SD ", "each run"]
+            return heads, [[r["group"], r["label"], r["sub-population"] or "—", r["n"],
+                            r["mean"], r["sd"], r["ratio mean"], r["ratio sd"], r["runs"]]
+                           for r in report.replicate_rows(exp)]
         heads = ["group", "label", "role", "sample", "population", "count", "% parent",
                  "geometric mean", "median", "mean", "CV %", "÷ control"]
-        named = {"group", "label", "sample", "population"}
-        return heads, [[exp.name(h, r[h]) if h in named else r[h] for h in heads]
-                       for r in exp.results()]
+        named = {"label", "sample", "population"}
+        return heads, [[exp.title(r[h]) if h == "group" else exp.name(h, r[h]) if h in named
+                        else r[h] for h in heads] for r in exp.results()]
 
     def refresh(self):
         from . import report
@@ -611,7 +619,7 @@ class ResultsTab(QWidget):
         t.setRowCount(len(rows))
         for r, row in enumerate(rows):
             for c, v in enumerate(row):
-                txt = report.num(v, 2 if heads[c] in ("÷ control",) else
+                txt = report.num(v, 2 if heads[c] in ("÷ control", "÷ control mean", "SD ") else
                                  1 if heads[c] in ("% parent", "CV %") else 0) \
                     if isinstance(v, (int, float)) and not isinstance(v, bool) else str(v or "")
                 it = _item(txt, False)
@@ -1098,15 +1106,16 @@ class OptionsDialog(QDialog):
 # --- Report -----------------------------------------------------------------------------
 
 class ReportDialog(QDialog):
-    """The sections on the left (tick, drag in order), the report as it will read on the
-    right, one Save for the format chosen."""
+    """The format, the sections on the left (tick, drag in order: each format keeps its
+    own), the report as it will read on the right, one Save."""
 
     FORMATS = [(".pdf", "PDF"), (".html", "Web page (.html)"),
-               (".xlsx", "Excel workbook (the values: a sheet each)")]
+               (".pptx", "PowerPoint slide (figure + tables; the rest in its notes)"),
+               (".xlsx", "Excel workbook (a sheet per section)")]
+    OFF = {".pdf": [], ".html": [], ".pptx": ["samples", "checklist"],
+           ".xlsx": ["figure", "checklist"]}          # unticked at first, per format
 
     def __init__(self, win):
-        from . import report
-
         super().__init__(win)
         self.win = win
         self.setWindowTitle("Report")
@@ -1116,17 +1125,11 @@ class ReportDialog(QDialog):
         for ext, label in self.FORMATS:
             self.fmt.addItem(label, ext)
         self.fmt.setCurrentIndex(max(0, self.fmt.findData(win.opts.get("report_format"))))
-        self.list = QListWidget(toolTip="tick the sections; drag them in order")
+        self.fmt.currentIndexChanged.connect(self._format)
+        self.ext = self.fmt.currentData()
+        self.list = QListWidget(toolTip="tick the sections; drag them in order — each format "
+                                        "remembers its own")
         self.list.setDragDropMode(QAbstractItemView.InternalMove)
-        names = dict(report.SECTIONS)
-        order = [k for k in win.opts.get("report", []) if k in names]
-        off = set(win.opts.get("report_off", []))
-        for k in order + [k for k in names if k not in order]:
-            it = QListWidgetItem(names[k])
-            it.setData(Qt.UserRole, k)
-            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
-            it.setCheckState(Qt.Unchecked if k in off else Qt.Checked)
-            self.list.addItem(it)
         self.list.itemChanged.connect(lambda _: self.timer.start())
         self.list.model().rowsMoved.connect(lambda *_: self.timer.start())
         self.full = QCheckBox("every sample and population in the results, too")
@@ -1135,7 +1138,7 @@ class ReportDialog(QDialog):
         save.clicked.connect(self.save)
         QShortcut(QKeySequence.Save, self, self.save)
         side = QWidget()
-        side.setFixedWidth(300)
+        side.setFixedWidth(330)
         v = QVBoxLayout(side)
         v.setContentsMargins(0, 0, 0, 0)
         v.addWidget(QLabel("<b>Format</b>"))
@@ -1151,6 +1154,42 @@ class ReportDialog(QDialog):
         h = QHBoxLayout(self)
         h.addWidget(side)
         h.addWidget(self.view, 1)
+        self._fill()
+        self.refresh()
+
+    def _state(self, ext) -> tuple[list[str], set[str]]:
+        """(order, unticked) for *ext*: as left, else the format's defaults."""
+        from . import report
+
+        keys = [k for k, _ in report.SECTIONS]
+        st = self.win.opts.get("report_sections", {}).get(ext)
+        if st is None and ext in (".pdf", ".html") and "report" in self.win.opts:
+            st = {"order": self.win.opts["report"], "off": self.win.opts.get("report_off", [])}
+        st = st or {"order": keys, "off": self.OFF.get(ext, [])}
+        order = [k for k in st["order"] if k in keys]
+        return order + [k for k in keys if k not in order], set(st["off"])
+
+    def _fill(self):
+        from . import report
+
+        names = dict(report.SECTIONS)
+        order, off = self._state(self.ext)
+        self.list.blockSignals(True)
+        self.list.clear()
+        for k in order:
+            place = report.where(self.ext, k)
+            it = QListWidgetItem(names[k] + (f"  — {place}" if place else ""))
+            it.setData(Qt.UserRole, k)
+            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+            it.setCheckState(Qt.Unchecked if k in off else Qt.Checked)
+            self.list.addItem(it)
+        self.list.blockSignals(False)
+        self.full.setEnabled(self.ext in (".pdf", ".html"))
+
+    def _format(self, _):
+        self._remember()
+        self.ext = self.fmt.currentData()
+        self._fill()
         self.refresh()
 
     def sections(self):
@@ -1159,9 +1198,9 @@ class ReportDialog(QDialog):
 
     def _remember(self):
         items = [self.list.item(i) for i in range(self.list.count())]
-        self.win.opts["report"] = [i.data(Qt.UserRole) for i in items]
-        self.win.opts["report_off"] = [i.data(Qt.UserRole) for i in items
-                                       if i.checkState() != Qt.Checked]
+        self.win.opts.setdefault("report_sections", {})[self.ext] = {
+            "order": [i.data(Qt.UserRole) for i in items],
+            "off": [i.data(Qt.UserRole) for i in items if i.checkState() != Qt.Checked]}
         self.win.opts["report_format"] = self.fmt.currentData()
         self.win.save_options()
 
@@ -1170,7 +1209,15 @@ class ReportDialog(QDialog):
 
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            text, images = report.build(self.win.exp, self.sections(), self.full.isChecked())
+            exp, secs = self.win.exp, self.sections()
+            if self.ext == ".pptx":
+                text, images, notes = report.pptx_parts(exp, secs)
+                text = text.replace("</body>", "<h2>Notes (below the slide)</h2><pre "
+                                    "style='white-space: pre-wrap; font-size: 8.5pt'>"
+                                    f"{html.escape(notes)}</pre></body>")
+            else:
+                text, images = report.build(exp, secs, self.full.isChecked() and
+                                            self.ext in (".pdf", ".html"))
             y = self.view.verticalScrollBar().value()
             self.view.setDocument(html_document(text, images, self.view))
             self.view.verticalScrollBar().setValue(y)
@@ -1178,10 +1225,23 @@ class ReportDialog(QDialog):
             QApplication.restoreOverrideCursor()
         self._remember()
 
-    def save(self):
+    def write(self, p):
         from . import report
 
-        win, ext = self.win, self.fmt.currentData()
+        exp, ext, secs = self.win.exp, self.ext, self.sections()
+        if ext == ".xlsx":
+            report.save_xlsx(exp, p, secs)
+        elif ext == ".pptx":
+            report.save_pptx(exp, p, secs)
+        else:
+            text, images = report.build(exp, secs, self.full.isChecked())
+            if ext == ".html":
+                report.save_html(text, images, p)
+            else:
+                to_pdf(text, images, p)
+
+    def save(self):
+        win, ext = self.win, self.ext
         p, _ = QFileDialog.getSaveFileName(
             self, "Save the report",
             str(Path(win.opts.get("last_dir") or Path.home()) / (win.stem() + "_report" + ext)),
@@ -1191,14 +1251,10 @@ class ReportDialog(QDialog):
         self._remember()
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            if ext == ".xlsx":
-                report.save_xlsx(win.exp, p)
-            else:
-                text, images = report.build(win.exp, self.sections(), self.full.isChecked())
-                if ext == ".html":
-                    report.save_html(text, images, p)
-                else:
-                    to_pdf(text, images, p)
+            self.write(p)
+        except OSError as e:
+            QMessageBox.warning(self, APP_NAME, f"Could not write the report:\n{e}")
+            return
         finally:
             QApplication.restoreOverrideCursor()
         win.log(f"✓ report saved: {p}")
@@ -1267,7 +1323,7 @@ class MainWindow(QMainWindow):
                                       "(Gating-ML) — the kind is told by the file",
              self.import_dialog),
                 (None, None, None, None),
-                ("Report…", "Ctrl+P", "PDF, HTML or Excel", self.report)]:
+                ("Report…", "Ctrl+P", "PDF, HTML, PowerPoint or Excel", self.report)]:
             if text is None:
                 bar.addSeparator()
                 continue
@@ -1448,6 +1504,16 @@ class MainWindow(QMainWindow):
                 if n in known.get(kind, {}) and n not in exp.aliases.get(kind, {}):
                     exp.aliases.setdefault(kind, {})[n] = known[kind][n]
 
+    def _pool_same_named(self):
+        """Two runs' folders named alike (a space for a dash): one name, so they are
+        replicates of one condition (▤ Aliases keeps them apart again)."""
+        for g, first in self.exp.same_named().items():
+            self.set_alias("group", g, first, remember=False)
+            self.log(f"✓ '{g}' shown as '{first}' (the same name but for spaces and dashes): "
+                     "another run of it — pooled as replicates in Results; ▤ Aliases to "
+                     "keep them apart")
+            self.dirty = True
+
     def aliases_dialog(self):
         if not self.exp.samples:
             self.log("✗ no sample yet")
@@ -1524,6 +1590,7 @@ class MainWindow(QMainWindow):
                 from . import plots
                 fig["panels"] += [plots.new_panel(g) for g in new_groups]
             self._known_aliases()
+            self._pool_same_named()
         finally:
             QApplication.restoreOverrideCursor()
         if not added and not bad:
@@ -1600,12 +1667,14 @@ class MainWindow(QMainWindow):
             return
         exp.record = record.clean(exp.record, exp.labels())
         self.exp = exp
+        self.dirty = False
+        self.log(f"✓ opened {p}", *[f"⚠ {x}" for x in problems])
         self._known_aliases()
+        self._pool_same_named()
         self.undo.clear()
         self.redo.clear()
         self.refresh_all()
-        self.set_dirty(False)
-        self.log(f"✓ opened {p}", *[f"⚠ {x}" for x in problems])
+        self.set_dirty(self.dirty)
 
     def _dir(self):
         return self.opts.get("last_dir") or str(Path.home())

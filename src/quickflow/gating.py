@@ -389,7 +389,12 @@ class GatingTab(QWidget):
                                             "on the dot plot, then the first again", self.new_polygon),
                               ("+ Range", "on the histogram's channel, below the selected "
                                           "population (starts above 99 % of the control)",
-                               self.new_range)]:
+                               self.new_range),
+                              ("+ Singlets", "a 'singlets (auto)' polygon on FSC-A × FSC-H "
+                                             "below the selected polygon (else the main "
+                                             "population), first under it: doublets (twice "
+                                             "the area for the height) left out",
+                               self.singlets)]:
             b = QPushButton(text, toolTip=tip)
             b.clicked.connect(fn)
             h.addWidget(b)
@@ -898,6 +903,40 @@ class GatingTab(QWidget):
         self.win.changed()
         self.win.log(f"✓ {self.group} › {name}: from {lo:.0f} (99 % of "
                      f"{c.label if c else 'the events'} below it) — drag to adjust")
+
+    def singlets(self):
+        exp = self.win.exp
+        if not self.group:
+            return
+        g = self.gate()
+        parent = g.name if g is not None and g.kind == "polygon" else \
+            exp.main_population(self.group)
+        parent = "" if parent == model.ALL else parent
+        ss = exp.in_group(self.group)
+        if not all("FSC-A" in s.fcs.data and "FSC-H" in s.fcs.data for s in ss):
+            self.win.log("✗ singlets: these files have no FSC-A and FSC-H")
+            return
+        v, pct = model.singlets_gate(ss, [exp.masks(s)[parent or model.ALL] for s in ss])
+        if not v:
+            self.win.log("✗ singlets: too few events")
+            return
+        names = {x.name for x in self.gates()}
+        name = next(n for n in [model.SINGLETS] + [f"{model.SINGLETS} {i}" for i in range(2, 99)]
+                    if n not in names)
+        self.win.snap()
+        gs = self.gates()
+        at = next((i + 1 for i, x in enumerate(gs) if x.name == parent), 0)
+        gs.insert(at, model.Gate(name, parent, "polygon", "FSC-A", "FSC-H", v))
+        self.pop = name
+        sat = max((model.saturated(s).get("FSC-A", 0) for s in ss), default=0)
+        self.win.log(f"✓ {self.group} › {parent or model.ALL} › {name}: {pct:.1f} % of the "
+                     "events (the band of FSC-A / FSC-H around its peak) — check it on "
+                     "FSC-A × FSC-H" + (f"\n⚠ {sat:.0f} % of the events are off scale on FSC-A: "
+                                         "their ratio is cut, the gate takes them as on its "
+                                         "edge" if sat > 5 else ""))
+        self.win.changed()
+        self._axes_to(self.gate())                  # FSC-H is offered now: show the gate
+        self.draw()
 
     def delete(self):
         g = self.gate()

@@ -174,6 +174,38 @@ class Experiment:
             return self.samples[0].fcs.label(key)
         return key
 
+    def pool(self, g: str) -> list[str]:
+        """The groups shown under *g*'s name, *g* among them: replicates (runs) of one
+        condition."""
+        n = self.name("group", g)
+        return [x for x in self.groups() if self.name("group", x) == n]
+
+    def run_of(self, g: str) -> str:
+        """The day the group's files were acquired ('2026-05-27'), else its own name."""
+        days = sorted({fcs.when(s.fcs.meta)[:10] for s in self.in_group(g)} - {""})
+        return days[0] if days else g
+
+    def title(self, g: str) -> str:
+        """The group's name as shown; its run's day after it when replicates share it."""
+        n = self.name("group", g)
+        if len(self.pool(g)) < 2:
+            return n
+        runs = [self.run_of(x) for x in self.pool(g)]
+        return f"{n} · {self.run_of(g) if runs.count(self.run_of(g)) == 1 else g}"
+
+    def same_named(self) -> dict[str, str]:
+        """Groups whose names differ only by case, spaces or punctuation from an earlier
+        group's ('MDA-MB-157-parental cells' / 'MDA-MB-157 parental cells': two runs'
+        folders), neither renamed: {group: the earlier one's name}."""
+        out, seen = {}, {}
+        named = self.aliases.get("group", {})
+        for g in self.groups():
+            k = re.sub(r"[^0-9a-z]+", "", g.lower())
+            if k in seen and g not in named and seen[k] not in named:
+                out[g] = seen[k]
+            seen.setdefault(k, g)
+        return out
+
     # -- channels
     def all_channels(self) -> list[str]:
         return list(self.samples[0].fcs.channels) if self.samples else []
@@ -507,6 +539,66 @@ def auto_gate(samples: list[Sample], x: str, y: str, level: float = 0.15) -> lis
     return []
 
 
+SINGLETS = "singlets (auto)"
+
+
+def singlets_gate(samples: list[Sample], masks: list, x: str = "FSC-A",
+                  y: str = "FSC-H") -> tuple[list, float]:
+    """A polygon on area (x) × height (y) around the singlets - a doublet has about twice
+    the area for the same height. The singlets' ridge is a line A = c0 + c1·H through the
+    densest area in each height slice (the area / height ratio grows with the cells' size,
+    so no single ratio fits); the band around it is measured on its left side (singlets
+    only; the doublets are the right tail): 3 σ above the line, 4 σ below, σ relative to
+    the line. *masks*: each sample's parent population. Returns (vertices, % of the
+    events in); ([], 0) with too few events."""
+    A, H, top = [], [], 0.0
+    for s, m in zip(samples, masks):
+        f = s.fcs
+        if x in f.data and y in f.data:
+            A.append(f.data[x][m])
+            H.append(f.data[y][m])
+            top = max(top, f.range(x) or 0)
+    if not A:
+        return [], 0.0
+    A, H = np.concatenate(A), np.concatenate(H)
+    top = top or float(A.max())
+    ok = (H > 0) & (A > 0) & (A < top - 1)            # the off-scale pile has no ratio
+    if ok.sum() < 200:
+        return [], 0.0
+    a, h = A[ok], H[ok]
+    ridge = []                                        # the densest area per height slice
+    for lo, hi in zip(*(np.percentile(h, q) for q in (np.arange(2, 98, 8),
+                                                       np.arange(10, 106, 8).clip(max=98)))):
+        sel = a[(h >= lo) & (h < hi)]
+        if sel.size < 50:
+            continue
+        cnt, e = np.histogram(sel, bins=60, range=tuple(np.percentile(sel, [1, 99])))
+        cnt = np.convolve(cnt, np.ones(3) / 3, mode="same")
+        ridge.append(((lo + hi) / 2, (e[cnt.argmax()] + e[cnt.argmax() + 1]) / 2, sel.size))
+    if len(ridge) < 3:
+        return [], 0.0
+    rh, ra, w = (np.array(v, float) for v in zip(*ridge))
+    c1, c0 = np.polyfit(rh, ra, 1, w=np.sqrt(w))
+    line = c0 + c1 * h
+    rel = (a - line) / np.maximum(line, 1.0)
+    left = rel[rel < 0]
+    sd = -float(np.percentile(left, 31.7)) if left.size > 50 else 0.1
+    lo_f, hi_f = 1 - 4 * sd, 1 + 3 * sd
+    h0, h1 = float(np.percentile(h, 0.2)) * 0.9, float(np.percentile(h, 99.8)) * 1.05
+    L = lambda hh: c0 + c1 * hh                         # noqa: E731
+    v = [[max(lo_f * L(h0), 0.0), h0], [hi_f * L(h0), h0]]
+    if hi_f * L(h1) > top and c1 > 0:                   # past the scale's top: its edge
+        hx = (top / hi_f - c0) / c1
+        v += [[top, hx], [top, h1]]
+    else:
+        v += [[hi_f * L(h1), h1]]
+    v += [[min(lo_f * L(h1), top), h1]]
+    from matplotlib.path import Path as Poly
+    pts = np.column_stack([np.minimum(A, top - 1), H])
+    pct = 100 * float(Poly(np.asarray(v)).contains_points(pts).mean())
+    return [[float(p), float(q)] for p, q in v], pct
+
+
 def _split_level(h: np.ndarray, main: int, floor: float) -> float:
     """The density at which the main peak's region would take in another cluster (its
     own peak ≥ 10 % of the main one above that level, ≥ 2 % of the events): flood the
@@ -700,6 +792,27 @@ def self_check(data: Path) -> int:
     inside = Poly(np.array(v)).contains_points(xy)
     assert inside[:20000].mean() > 0.8 and inside[20000:].mean() < 0.1, \
         (inside[:20000].mean(), inside[20000:].mean())
+    # singlets: a band of area / height around 1.8, doublets at about twice the area
+    hs = rng.uniform(2e6, 6e6, 12000)
+    a1 = hs * rng.normal(1.8, 0.08, 12000)
+    hd = rng.uniform(2e6, 6e6, 1500)
+    a2 = hd * 1.05 * rng.normal(3.4, 0.2, 1500)
+    A, H = np.concatenate([a1, a2]), np.concatenate([hs, hd * 1.05])
+    f = fcs.FCS(Path("s.fcs"), {"$P1R": "16777216", "$P2R": "16777216"}, ["FSC-A", "FSC-H"],
+                ["", ""], {"FSC-A": A, "FSC-H": H})
+    _cache[str(Path("s.fcs").resolve())] = f
+    v, pct = singlets_gate([Sample("s.fcs")], [np.ones(A.size, bool)])
+    inside = Poly(np.array(v)).contains_points(np.column_stack([A, H]))
+    assert inside[:12000].mean() > 0.97 and inside[12000:].mean() < 0.05, \
+        (inside[:12000].mean(), inside[12000:].mean())
+    # two runs of one cell line: their folders' names differ by a space or a dash
+    e3 = Experiment(samples=[Sample("a.fcs", group="MDA-MB-157 parental cells"),
+                             Sample("b.fcs", group="MDA-MB-157-parental cells"),
+                             Sample("c.fcs", group="MDA-MB-157-mCDCP1")])
+    assert e3.same_named() == {"MDA-MB-157-parental cells": "MDA-MB-157 parental cells"}
+    e3.aliases = {"group": {"MDA-MB-157-parental cells": "MDA-MB-157 parental cells"}}
+    assert e3.pool("MDA-MB-157 parental cells") == ["MDA-MB-157 parental cells",
+                                                    "MDA-MB-157-parental cells"]
     print("model self-check", "OK" if ok else "FAILED")
     return 0 if ok else 1
 

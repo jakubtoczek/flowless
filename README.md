@@ -59,7 +59,10 @@ wrong (✗ ⚠).
    Editing a polygon: drag a corner; click a side to add a corner; click a corner to select it,
    **Del** deletes it; drag inside to move the gate. **+ Polygon**: click its corners (a click
    outside the plot puts the corner on its edge: the gate then takes the events piled there,
-   off scale), then the first one again, a double-click or Enter. **+ Range** starts above 99 %
+   off scale), then the first one again, a double-click or Enter. **+ Singlets** adds a
+   *singlets (auto)* gate on FSC-A × FSC-H first under the selected polygon (else the main
+   population), so the figure and the values use it: doublets (about twice the area for
+   the same height) are left out. **+ Range** starts above 99 %
    of the negative control's events; drag its limits. **Del** deletes the selected population,
    F2 renames it. *events of* shows one sample; **this sample's own gate** gives it its own
    version of the selected gate (◆ in the tree), the group's being the default. Click a plot,
@@ -87,7 +90,9 @@ wrong (✗ ⚠).
    set; *export* ticked: the exports too); click a panel to select it; **Ctrl+C** copies
    it. **Save…** PNG / TIFF (dpi) or SVG / PDF (text stays text), **Colour + B&W…** both at once.
 4. **Results** — the figure's table (group, label, sub-population, events, % of parent, value,
-   ÷ control: each group's population the figure shows, and the ranges below it),
+   ÷ control: each group's population the figure shows, and the ranges below it), the
+   **replicates** (runs pooled: each label's n, mean ± SD of the value and of ÷ control, each
+   run's value),
    or every sample and population (count, % of parent, geometric mean, median, mean, CV). The
    value and the channel measured are chosen here. **Copy** (Ctrl+C) pastes as a table in
    Excel, Word or PowerPoint; **Export…** `.xlsx` (every sheet) or `.csv`; **Report…**.
@@ -108,9 +113,22 @@ experiments with the same names.
 FSC-A, SSC-A and the areas of the fluorochromes the reagents name — heights and other
 detectors hidden; a channel a gate is on is always offered); the figure options listed.
 
-**Report… (Ctrl+P)**: the sections on the left (tick them, drag them in order), the report as
-it reads on the right; then PDF, HTML or Excel. *Files* lists each FCS file on a line (name,
-folder, last modified, SHA-256), and the gates' file while the gates are as in it.
+**Report… (Ctrl+P)**: the format, the sections on the left (tick them, drag them in order —
+each format keeps its own choice), the report as it will read on the right; **Save report…**.
+PDF and HTML: the sections one after the other. **PowerPoint**: one slide, a figure page —
+the title, the figure at its size, the summary and the replicates as real tables (editable in
+PowerPoint); every other section ticked goes as text in the slide's notes (by default the
+experiment, procedure, gating, instrument and files; the samples table and the checklist
+off). **Excel**: a sheet per section (Summary and Results, Replicates, Samples, Files,
+Experiment, Procedure, Gates, Instrument and Keywords, MIFlowCyt, the figure as a picture).
+*Files* lists each FCS file on a line (name, folder, last modified, SHA-256), and the gates'
+file while the gates are as in it.
+
+**Replicates**: groups shown under one name (▤ Aliases) are runs of one condition. Two
+groups whose names differ only by spaces, dashes or case (two runs' folders: *MDA-MB-157
+parental cells* / *MDA-MB-157-parental cells*) get one name when they come in, and the log
+says so. Their figure panels and tables add the run's day (*… · 2026-05-27*); a **Values
+(bars)** panel of one of them shows each label's mean over the runs ± SD, a dot per run.
 
 Numbers are written with a decimal point whatever the system's language; the mouse wheel
 scrolls past the lists and number boxes, it never changes them.

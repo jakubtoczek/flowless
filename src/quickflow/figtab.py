@@ -459,7 +459,7 @@ class FigureTab(QWidget):
         what = exp.name("channel", ch) + (f" × {exp.name('channel', p.get('y') or 'SSC-A')}"
                                           if p.get("kind") == "dot" else "")
         mark = " •" if p.get("opts") else ""
-        return f"{kind} · {exp.name('group', p.get('group', ''))} · {what}{mark}"
+        return f"{kind} · {exp.title(p.get('group', ''))} · {what}{mark}"
 
     def _selected(self, row):
         self.sel = row - 1
@@ -544,7 +544,7 @@ class FigureTab(QWidget):
         what = exp.name("channel", ch) + (f" × {exp.name('channel', p.get('y') or 'SSC-A')}"
                                           if p.get("kind") == "dot" else "")
         return (f"{dict(plots.KINDS).get(p.get('kind'), p.get('kind'))}\n"
-                f"{p.get('title') or exp.name('group', p.get('group', ''))}\n{what}")
+                f"{p.get('title') or exp.title(p.get('group', ''))}\n{what}")
 
     def _res(self, v):
         self.res_label.setText(f"{v / 10:.1f}×")
@@ -754,7 +754,7 @@ class FigureTab(QWidget):
 
         ss.itemChanged.connect(picked)
         f.addRow("samples", ss)
-        title = QLineEdit(p.get("title", ""), placeholderText=exp.name("group", p.get("group", "")))
+        title = QLineEdit(p.get("title", ""), placeholderText=exp.title(p.get("group", "")))
         title.editingFinished.connect(lambda: self._panel_set("title", title.text(), rebuild=False))
         f.addRow("title", title)
         return box

@@ -363,12 +363,71 @@ def main(argv) -> int:
     report.save_html(text, images, out / "report.html")
     qapp.to_pdf(text, images, out / "report.pdf")
     assert (out / "report.pdf").stat().st_size > 20000
+    # a singlets gate: first under the main population, so the figure measures it
+    w.tabs.setCurrentIndex(1)
+    g = w.gating_tab
+    g.pop = w.exp.main_population(g.group)
+    g.fill_tree()
+    main = g.pop
+    g.singlets()
+    assert w.exp.main_population(g.group) == model.SINGLETS, w.exp.gates[g.group]
+    sg = next(x for x in w.exp.gates[g.group] if x.name == model.SINGLETS)
+    assert (sg.parent, sg.x, sg.y) == (main, "FSC-A", "FSC-H") and g.cy.currentData() == "FSC-H"
+    n_in = [r["% parent"] for r in w.exp.results() if r["population"] == model.SINGLETS]
+    assert all(45 < x < 90 for x in n_in), n_in   # OVCAR's gate on FSC-H × SSC-H: ~40 % doublets
+    w.do_undo()
+    # two runs of one cell line, their folders named alike: pooled as replicates
+    w.open_paths([data / "20260527_165837" / "MDA-MB-157 parental cells",
+                  data / "20260611_152206" / "MDA-MB-157-parental cells"])
+    pooled = "MDA-MB-157-parental cells"
+    assert w.exp.name("group", pooled) == "MDA-MB-157 parental cells", w.exp.aliases
+    assert w.exp.title(pooled).endswith("2026-06-11"), w.exp.title(pooled)
+    rr = report.replicate_rows(w.exp)
+    assert rr and all(r["n"] == 2 and r["sd"] is not None for r in rr), rr
+    ctrl = next(r for r in rr if r["label"] == w.exp.name("label", "0006"))
+    assert abs(ctrl["ratio mean"] - 1) < 1e-9, ctrl
+    w.tabs.setCurrentIndex(3)
+    w.results_tab.mode.setCurrentIndex(2)
+    assert w.results_tab.table.rowCount() == len(rr)
+    w.results_tab.mode.setCurrentIndex(0)
+    f = w.figure_tab
+    own = f._own_panels()
+    bars = plots.new_panel(pooled, "bars")
+    own.insert(0, bars)
+    fig = plots.figure(w.exp)
+    ax = fig.axes[0]
+    assert "2 runs" in ax.get_title() and ax.containers, "the pooled bars: mean ± SD"
+    own.remove(bars)
+    # the report: each format its own sections; a PowerPoint slide, an Excel by section
     rd = qapp.ReportDialog(w)
+    rd.fmt.setCurrentIndex(rd.fmt.findData(".pdf"))
     assert "SHA-256" in rd.view.toPlainText() and rd.list.count() == len(report.SECTIONS)
     rd.list.item(0).setCheckState(Qt.Unchecked)
     rd.refresh()
-    assert w.opts["report_off"] == [rd.list.item(0).data(Qt.UserRole)]
+    assert w.opts["report_sections"][".pdf"]["off"] == [rd.list.item(0).data(Qt.UserRole)]
+    rd.fmt.setCurrentIndex(rd.fmt.findData(".pptx"))
+    ticked = rd.sections()
+    assert "samples" not in ticked and "experiment" in ticked, ticked
+    assert "slide" in rd.list.item(1).text() or "notes" in rd.list.item(1).text()
+    assert "Notes (below the slide)" in rd.view.toPlainText()
+    rd.write(out / "report.pptx")
+    from pptx import Presentation
+    deck = Presentation(out / "report.pptx")
+    assert len(deck.slides) == 1
+    shapes = {sh.name for sh in deck.slides[0].shapes}
+    assert {"Title", "Figure"} <= shapes and any(n in shapes for n in ("Summary",)), shapes
+    assert any(sh.has_table and len(sh.table.rows) > 5 for sh in deck.slides[0].shapes)
+    notes = deck.slides[0].notes_slide.notes_text_frame.text
+    assert "PROCEDURE AND REAGENTS" in notes and "AB9108" in notes, notes[:400]
+    rd.fmt.setCurrentIndex(rd.fmt.findData(".xlsx"))
+    rd.write(out / "report.xlsx")
+    from openpyxl import load_workbook
+    sheets = load_workbook(out / "report.xlsx").sheetnames
+    assert "Summary" in sheets and "Replicates" in sheets and "Figure" not in sheets, sheets
+    rd.fmt.setCurrentIndex(rd.fmt.findData(".pdf"))
+    assert rd.list.item(0).checkState() == Qt.Unchecked, "the PDF's own sections came back"
     if shots:
+        rd.fmt.setCurrentIndex(rd.fmt.findData(".pptx"))
         rd.resize(1300, 850)
         rd.grab().save(str(shots / "6_report.png"))
     rd.close()
