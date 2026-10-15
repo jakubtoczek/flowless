@@ -895,23 +895,20 @@ class FigureTab(QWidget):
 
     def _series_box(self) -> QGroupBox:
         exp = self.win.exp
-        box = QGroupBox("Series — each label, in every panel (one name: one series)")
+        box = QGroupBox("Series, in order")
+        box.setToolTip("each label, in every panel; labels shown under one name (▤) are one "
+                       "series; ▲ ▼: its place in the legend, the tables, the stacks and bars")
         f = QFormLayout(box)
         o = plots.options(exp)
         styles = plots.series_style(exp, o)
         custom = self.fig_dict().setdefault("series", {})
-        seen = set()
-        for lab in exp.labels():               # labels under one name (▤): the first's row
-            n = exp.name("label", lab)
-            if n in seen or not any(exp.name("label", s.label) == n and s.plot
-                                    for s in exp.samples):
-                continue
-            seen.add(n)
+        shown = self._series_names()
+        for k, lab in enumerate(shown.values()):   # labels under one name (▤): the first's row
             st = styles[lab]
             row = QHBoxLayout()
             col = QToolButton(toolTip="colour (in colour figures)")
             colour = custom.get(lab, {}).get("color") or (st["fill"] or st["edge"])
-            col.setStyleSheet(f"background: {colour}; min-width: 28px")
+            col.setStyleSheet(f"background: {colour}; min-width: 20px")
             col.clicked.connect(lambda _=False, lab=lab, c=colour: self._pick_colour(lab, c))
             dash = QComboBox(toolTip="line (dashes)")
             dash.addItem("(automatic)", "")
@@ -923,6 +920,13 @@ class FigureTab(QWidget):
             fill = QCheckBox("fill")
             fill.setChecked(custom.get(lab, {}).get("fill", True) is not False)
             fill.toggled.connect(lambda v, lab=lab: self._series_set(lab, "fill", None if v else False))
+            for text, d in (("▲", -1), ("▼", 1)):
+                b = QToolButton(text=text, toolTip="earlier in the legend, the tables, the "
+                                                   "stacks and bars" if d < 0 else "later")
+                b.setEnabled(0 <= k + d < len(shown))
+                b.setFixedWidth(18)
+                b.clicked.connect(lambda _=False, k=k, d=d: self._series_move(k, d))
+                row.addWidget(b)
             row.addWidget(col)
             row.addWidget(dash, 1)
             row.addWidget(fill)
@@ -931,6 +935,30 @@ class FigureTab(QWidget):
             row.setContentsMargins(0, 0, 0, 0)
             f.addRow(exp.name("label", lab) + (" (control)" if st["ctrl"] else ""), w)
         return box
+
+    def _series_names(self) -> dict[str, str]:
+        """{name: its first label}, in order: the series a figure can show."""
+        exp, out = self.win.exp, {}
+        for lab in exp.labels():
+            n = exp.name("label", lab)
+            if n not in out and any(exp.name("label", s.label) == n and s.plot
+                                    for s in exp.samples):
+                out[n] = lab
+        return out
+
+    def _series_move(self, k, d):
+        """The k-th series shown one place earlier (d = -1) or later (+1): the experiment's
+        order of labels, every label under a name moving with it."""
+        exp = self.win.exp
+        shown = list(self._series_names())
+        a, b = shown[k], shown[k + d]
+        names = list(dict.fromkeys(exp.name("label", lab) for lab in exp.labels()))
+        i, j = names.index(a), names.index(b)
+        names[i], names[j] = names[j], names[i]
+        self.win.snap()
+        exp.label_order = [lab for n in names for lab in exp.labels()
+                           if exp.name("label", lab) == n]
+        self.win.changed()
 
     def _pick_colour(self, lab, current):
         c = QColorDialog.getColor(QColor(current), self, f"Colour of {lab}")

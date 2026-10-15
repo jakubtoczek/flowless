@@ -541,6 +541,24 @@ def main(argv) -> int:
     f.items.setCurrentRow(0)
     f.preset.setCurrentText("colour")
     f._apply_preset()
+    # the series' order: ▲ on the last series puts it before the one above, everywhere
+    f.items.setCurrentRow(0)
+    o = plots.options(w.exp)
+    names = list(f._series_names())
+    assert len(names) >= 2, names
+    f._series_move(len(names) - 1, -1)
+    want = names[:-2] + [names[-1], names[-2]]
+    assert list(f._series_names()) == want, (names, list(f._series_names()))
+    leg = plots._legend_entries(w.exp, plots.panels(w.exp), plots.series_style(w.exp, o), o)[1]
+    assert [n for n in leg if n in want] == [n for n in want if n in leg], leg
+    rk = w.exp.rank()
+    sr = report.summary_rows(w.exp)
+    for g in w.exp.groups():
+        got = [rk[r["label"]] for r in sr if r["group"] == g]
+        assert got == sorted(got), (g, got)
+    assert model.Experiment.from_dict(w.exp.to_dict())[0].labels() == w.exp.labels()
+    w.do_undo()
+    assert list(f._series_names()) == names and not w.exp.label_order
     # Results: sorted by a column's title, the other way, then as computed
     rt = w.results_tab
     rt.mode.setCurrentIndex(0)

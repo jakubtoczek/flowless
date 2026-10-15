@@ -372,7 +372,9 @@ def hist_axes(ax, exp, panel: dict, o: dict, styles: dict, only=None) -> None:
     peak = max(h.max() for _, _, h in curves) or 1
     step = 1.02 * peak if o["layout"] == "offset" else 0.0   # no trace crosses the next
     # draw order: controls at the back, then table order; offset: first at the bottom
-    order = sorted(curves, key=lambda c: not styles.get(c[0].label, {}).get("ctrl"))
+    rk = exp.rank()
+    order = sorted(curves, key=lambda c: (not styles.get(c[0].label, {}).get("ctrl"),
+                                          rk.get(c[0].label, 0)))
     for i, (s, x, h) in enumerate(order):
         sty = styles.get(s.label) or {"edge": INK, "fill": None, "dash": "-", "ctrl": False}
         base = i * step
@@ -635,7 +637,8 @@ def bars_axes(ax, exp, panel: dict, o: dict, styles: dict) -> None:
     ch = panel.get("x") or exp.marker
     pop = panel.get("population") or exp.main_population(group)
     key = model.STATS.get(exp.stat, "gmean")
-    ss = sorted(panel_samples(exp, panel), key=lambda s: not styles.get(s.label, {}).get("ctrl"))
+    rk = exp.rank()
+    ss = sorted(panel_samples(exp, panel), key=lambda s: rk.get(s.label, 0))   # the series' order
     def value(s, p):
         m = exp.masks(s).get(p)
         return model.stats(s.fcs.data[ch][m])[key] if m is not None and ch in s.fcs.data \
@@ -771,6 +774,10 @@ def _put_legend(where, handles, names, rect, o, W, H, ncol=1):
     vv = {"top": "upper", "center": "center", "bottom": "lower"}[v]
     loc = "center" if (h, v) == ("center", "center") else f"{vv} {h}"
     fig = where if isinstance(where, Figure) else where.figure
+    n = len(names)                     # matplotlib fills columns first: read across instead
+    rows = math.ceil(n / max(ncol, 1))
+    k = [r * ncol + c for c in range(ncol) for r in range(rows) if r * ncol + c < n]
+    handles, names = [handles[i] for i in k], [names[i] for i in k]
     where.legend(handles, names, loc=loc, bbox_to_anchor=(x / W, y / H), ncol=ncol,
                  bbox_transform=fig.transFigure, frameon=False, fontsize=o["legend_pt"],
                  handlelength=2.6, columnspacing=1.6, labelspacing=o["legend_space"],

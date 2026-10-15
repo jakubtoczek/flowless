@@ -104,8 +104,12 @@ A panel shows one group:
   typed), range gates, the value above each bar.
 - **Text**: titles, axis labels, x tick labels, y tick labels, range labels, legend. A title
   wider than its panel goes on two lines, at its size.
-- **Series** (each label, in every panel): colour, dashes, fill. Labels shown under one name
-  (▤ Aliases) are one series: one style, one legend entry.
+- **Series, in order** (each label, in every panel): colour, dashes, fill, and **▲ ▼** for
+  its place. The order is the legend's (read across, line by line), the tables' within each
+  group, the bars', and the histograms' (the control drawn first, at the back), and it sets
+  the automatic colours and dashes (the first series solid, then dashed…). Saved with the
+  experiment; Ctrl+Z undoes a move. Labels shown under one name (▤ Aliases) are one series:
+  one style, one legend entry, one place.
 - **style ▸ Apply**: a set at once (colour, black & white, offset, one column 85 mm, large for
   slides).
 - *Options ▸ Figure options* sets which options are listed.

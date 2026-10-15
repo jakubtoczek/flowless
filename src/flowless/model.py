@@ -123,6 +123,7 @@ class Experiment:
     channels: list = field(default_factory=list)                 # shown; [] = auto
     path: str = ""                                                # where it was saved
     gates_file: dict = field(default_factory=dict)    # {path, how, key}: the gates' file
+    label_order: list = field(default_factory=list)   # the series as the user ordered them
 
     # -- groups and samples
     def groups(self) -> list[str]:
@@ -132,12 +133,19 @@ class Experiment:
         return [s for s in self.samples if s.group == g]
 
     def labels(self) -> list[str]:
-        """Series in table order, controls first: what fixes each label's colour."""
+        """Series in order: as the user set them (label_order), the others after them in
+        table order, controls first. Fixes the legend's order and each label's colour."""
         order = {r: i for i, r in enumerate(["negative control", "sample", "secondary only",
                                              "unstained"])}
         seen = list(dict.fromkeys(s.label for s in self.samples))
         role = {s.label: s.role for s in self.samples}
-        return sorted(seen, key=lambda l: (order.get(role[l], 9), seen.index(l)))
+        rest = sorted((l for l in seen if l not in self.label_order),
+                      key=lambda l: (order.get(role[l], 9), seen.index(l)))
+        return [l for l in self.label_order if l in role] + rest
+
+    def rank(self) -> dict[str, int]:
+        """label -> its place in labels()."""
+        return {lab: i for i, lab in enumerate(self.labels())}
 
     def add(self, paths, negatives=()) -> tuple[list[Sample], list[str]]:
         """Load FCS files (folders: every .fcs inside); *negatives*: labels known to be
@@ -339,7 +347,8 @@ class Experiment:
                              **{k: st[v] for k, v in STATS.items()}, "CV %": st["cv"],
                              "÷ control": st[key] / c if c and st[key] is not None else None,
                              "own gate": pop in s.gates})
-        return rows
+        gi, rk = {g: i for i, g in enumerate(self.groups())}, self.rank()
+        return sorted(rows, key=lambda r: (gi[r["group"]], rk[r["label"]]))   # stable
 
     def gates_key(self) -> str:
         """A fingerprint of every gate (the groups' and the samples' own)."""
@@ -369,7 +378,8 @@ class Experiment:
                 "samples": samples,
                 "gates": {g: [asdict(x) for x in gs] for g, gs in self.gates.items()},
                 "record": self.record, "figure": self.figure, "aliases": self.aliases,
-                "channels": self.channels, "gates_file": self.gates_file}
+                "channels": self.channels, "gates_file": self.gates_file,
+                "label_order": self.label_order}
 
     def save(self, path) -> None:
         self.path = str(Path(path).resolve())
@@ -382,7 +392,7 @@ class Experiment:
         e = cls(marker=d.get("marker", ""), stat=d.get("stat", "geometric mean"),
                 record=d.get("record", {}), figure=d.get("figure", {}),
                 aliases=d.get("aliases", {}), channels=d.get("channels", []), path=path,
-                gates_file=d.get("gates_file", {}))
+                gates_file=d.get("gates_file", {}), label_order=d.get("label_order", []))
         base = Path(path).parent if path else None
         problems = []
         for sd in d.get("samples", []):
