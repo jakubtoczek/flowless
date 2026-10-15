@@ -10,19 +10,24 @@ Made on BD Accuri C6 Plus files; any FCS 2.0 / 3.0 / 3.1 list-mode file is read.
 
 ## Install (Windows)
 
-No admin rights, no PATH or registry changes.
+No admin rights, no PATH or registry changes, nothing written into your user profile.
 
-1. Put the folder somewhere it can stay (`C:\Users\Public\Flowless`, or your Documents).
-2. Double-click **`Flowless.bat`**. The first start downloads [`uv`](https://github.com/astral-sh/uv),
-   Python and the libraries into `C:\ProgramData\PyApps` (shared with other tools set up the
-   same way) and puts a **Flowless** shortcut on the Desktop; later starts are quick.
-   `Flowless.bat private` the first time keeps everything in `C:\Users\Public\Flowless`
-   instead; `FLOWLESS_RUNTIME` sets another place.
-   To pin it to the taskbar: right-click its taskbar button while it runs ▸ *Pin to taskbar*.
+1. On the GitHub page: **Code ▸ Download ZIP**.
+2. **Right-click the ZIP ▸ Properties ▸ tick *Unblock* ▸ OK** — without it, SmartScreen stops
+   the launcher with *"Windows protected your PC"*.
+3. Extract it where it can stay (`C:\Users\Public\Flowless` serves every account).
+4. Double-click **`Flowless.bat`**. The first time it downloads
+   [`uv`](https://github.com/astral-sh/uv), Python and the libraries (about 350 MB, a minute or
+   two) into the shared folder `C:\ProgramData\PyApps`, which other tools installed this way
+   reuse, and puts a **Flowless** shortcut on the Desktop. Use the shortcut from then on; to pin
+   it, right-click its taskbar button while it runs ▸ *Pin to taskbar*.
 
-`uninstall.bat` takes it all away again. What Flowless remembers (negative controls, aliases,
-recorded procedures, the columns and options shown, typed values) is in
-`flowless_options.json` beside `Flowless.bat`.
+Self-contained instead: run **`Flowless.bat private`** the first time, and everything goes into
+`C:\Users\Public\Flowless` (`FLOWLESS_RUNTIME` picks another place). **`uninstall.bat`**
+removes it: the whole private folder, or only Flowless's part of the shared one.
+
+What Flowless remembers (negative controls, aliases, recorded procedures, the columns and
+options shown, typed values) is in `flowless_options.json` beside `Flowless.bat`.
 
 ## Use
 
@@ -53,15 +58,24 @@ Each tab in detail, the figure's layout, the files read and how the numbers are 
 ## Dev
 
 ```
-uv run python -m flowless                          # launch
-uv run python -m flowless.model --self-check       # gates and values against the references
-uv run python -m flowless.record                   # reagent names read
+uv run python -m flowless                           # launch
+uv run python -m flowless.model --self-check        # gates and values against the references
+uv run python -m flowless.record                    # reagent names read
 uv run python misc/smoke_test.py [--shots DIR]      # the whole window, driven without a screen
-uv run python -m flowless.fcs FILE.fcs             # a file's keywords and channels
-uv run python -m flowless.imports.sheet SHEET.xlsx # what a procedure sheet gives
-uv run python -m flowless.imports.gatingml F.xml  # the gates a Gating-ML file gives
-uv run python misc/bump.py                          # stamp today's date as the version
+uv run python -m flowless.fcs FILE.fcs              # a file's keywords and channels
+uv run python -m flowless.imports.sheet SHEET.xlsx  # what a procedure sheet gives
+uv run python -m flowless.imports.gatingml F.xml    # the gates a Gating-ML file gives
+uv run python misc/bump.py                          # stamp today's date as the version (CalVer)
+uv run python misc/make_icon.py                     # redraw the icon (needs Pillow)
 ```
 
-The checks read the example data kept beside this folder (`../data/data`); another folder can
-be given at the end of the command.
+The checks read example runs (FCS files, FlowJo workspaces, procedure sheets) that are not in
+this repository: by default from `../data/data` beside the folder, or a folder given at the end
+of the command.
+
+Layers: `fcs.py` the FCS reader · `model.py` the experiment, gates, statistics (no Qt) ·
+`record.py` the experiment's record, reagents, MIFlowCyt · `imports/` other programs' files,
+best effort (`gatingml.py`, `flowjo.py`, `sheet.py`) · `plots.py` the figures, matplotlib only ·
+`report.py` HTML, PDF, Excel, PowerPoint · `app.py` the window and its dialogs, `gating.py`,
+`figtab.py`, `canvas.py` the Gating and Figure tabs. matplotlib is imported in a thread once the
+window is up, to keep it off the startup path.

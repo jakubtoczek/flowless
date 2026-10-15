@@ -6,3 +6,4 @@ venv/
 build/
 dist/
 flowless_options.json
+uv.lock
