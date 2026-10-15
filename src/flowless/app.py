@@ -30,9 +30,11 @@ from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QAbstract
 
 from . import __version__, fcs, imports, model, record
 
-APP_NAME = "QuickFlow"
+APP_NAME = "Flowless"
 _PKG = Path(__file__).resolve().parent
-OPTIONS = _PKG.parents[1] / "quickflow_options.json"     # beside QuickFlow.bat
+OPTIONS = _PKG.parents[1] / "flowless_options.json"     # beside Flowless.bat
+if not OPTIONS.exists() and OPTIONS.with_name("quickflow_options.json").exists():
+    OPTIONS.with_name("quickflow_options.json").rename(OPTIONS)   # its first name's
 SAMPLE_COLUMNS = ["⤢", "plot", "group", "label", "role", "condition", "file", "well",
                   "acquired", "events", "µL", "primary", "primary µL", "secondary",
                   "secondary µL", "cells", "note"]
@@ -88,7 +90,7 @@ def guard_wheel(root: QWidget) -> None:
 
 
 def app_icon():
-    p = _PKG / "assets" / "quickflow.ico"
+    p = _PKG / "assets" / "flowless.ico"
     return QIcon(str(p)) if p.exists() else None
 
 
@@ -1296,7 +1298,7 @@ def to_pdf(text: str, images: dict, path) -> None:
     w.setPageSize(QPageSize(QPageSize.A4))
     w.setPageMargins(QMarginsF(0, 0, 0, 0), QPageLayout.Millimeter)   # print_ adds 2 cm
     w.setTitle(Path(path).stem)
-    w.setCreator(f"QuickFlow {__version__}")
+    w.setCreator(f"Flowless {__version__}")
     doc.print_(w)
 
 
@@ -1444,7 +1446,7 @@ class MainWindow(QMainWindow):
         if self.exp.path:
             return Path(self.exp.path).stem
         g = record.clean(self.exp.record)["general"]
-        return g.get("title") or "quickflow"
+        return g.get("title") or "flowless"
 
     def _title(self):
         name = Path(self.exp.path).name if self.exp.path else "new experiment"
@@ -1591,7 +1593,7 @@ class MainWindow(QMainWindow):
             elif k == "sheet":
                 self.import_procedure(p)
             elif not k:
-                self.log(f"✗ {p.name}: not a file QuickFlow reads")
+                self.log(f"✗ {p.name}: not a file Flowless reads")
 
     def add_files(self, paths):
         self.snap()
@@ -1726,7 +1728,7 @@ class MainWindow(QMainWindow):
     def save_as(self):
         p, _ = QFileDialog.getSaveFileName(self, "Save the experiment",
                                            str(Path(self._dir()) / (self.stem() + ".json")),
-                                           "QuickFlow experiment (*.json)")
+                                           "Flowless experiment (*.json)")
         if not p:
             return False
         self.exp.path = str(Path(p).resolve())

@@ -1,7 +1,7 @@
 """A procedure sheet (.xlsx) as the lab writes them, free-form: read what can be found,
 the rest stays in the sheet. No Qt.
 
-    python -m quickflow.imports.sheet SHEET.xlsx     what a sheet gives
+    python -m flowless.imports.sheet SHEET.xlsx     what a sheet gives
 """
 
 from __future__ import annotations

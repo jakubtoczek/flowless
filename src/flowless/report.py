@@ -165,7 +165,7 @@ def build(exp: model.Experiment, sections=None, full_table: bool = False) -> tup
     parts.append(f"<h1>{html.escape(title)}</h1>")
     parts.append(f'<p class="meta">{html.escape(date)} · marker '
                  f"{html.escape(N('channel', exp.marker))} · "
-                 f"QuickFlow {__version__} · report {_dt.datetime.now():%Y-%m-%d %H:%M}</p>")
+                 f"Flowless {__version__} · report {_dt.datetime.now():%Y-%m-%d %H:%M}</p>")
     rows = exp.results()
     for key in sections:
         name = dict(SECTIONS)[key]

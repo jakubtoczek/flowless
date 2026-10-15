@@ -24,5 +24,5 @@ def kind(p: Path) -> str:
     return {".json": "experiment", ".wsp": "gates", ".xlsx": "sheet", ".xlsm": "sheet"}.get(ext, "")
 
 
-FILTER = ("Everything QuickFlow reads (*.fcs *.json *.xml *.wsp *.xlsx *.xlsm);;FCS (*.fcs);;"
-          "QuickFlow experiment (*.json);;Gates, Gating-ML 2.0 (*.xml)")
+FILTER = ("Everything Flowless reads (*.fcs *.json *.xml *.wsp *.xlsx *.xlsm);;FCS (*.fcs);;"
+          "Flowless experiment (*.json);;Gates, Gating-ML 2.0 (*.xml)")

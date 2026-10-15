@@ -1,4 +1,4 @@
-"""Entry point: launch the QuickFlow GUI."""
+"""Entry point: launch the Flowless GUI."""
 
 from __future__ import annotations
 
@@ -48,14 +48,14 @@ def _splash():
     pm = QPixmap(320, 150)
     pm.fill(QColor("#2b2b2b"))
     p = QPainter(pm)
-    icon = QPixmap(str(_PKG / "assets" / "quickflow.png"))
+    icon = QPixmap(str(_PKG / "assets" / "flowless.png"))
     if not icon.isNull():
         p.drawPixmap(20, 35, icon.scaled(80, 80, Qt.KeepAspectRatio, Qt.SmoothTransformation))
     p.setPen(QColor("#e0e0e0"))
     f = p.font()
     f.setPointSize(16)
     p.setFont(f)
-    p.drawText(120, 70, "QuickFlow")
+    p.drawText(120, 70, "Flowless")
     f.setPointSize(9)
     p.setFont(f)
     p.setPen(QColor("#8d8d8d"))
@@ -73,8 +73,8 @@ def _splash():
 def main() -> int:
     from PySide6.QtWidgets import QApplication
 
-    winshell.taskbar_identity("QuickFlow", "QuickFlow", _PKG.parents[1] / "QuickFlow.bat",
-                              _PKG / "assets" / "quickflow.ico")  # before any window
+    winshell.taskbar_identity("Flowless", "Flowless", _PKG.parents[1] / "Flowless.bat",
+                              _PKG / "assets" / "flowless.ico")  # before any window
     app = QApplication(sys.argv)
     splash = _splash()
     app.processEvents()

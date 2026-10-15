@@ -908,7 +908,7 @@ wheels = [
 ]
 
 [[package]]
-name = "quickflow"
+name = "flowless"
 source = { editable = "." }
 dependencies = [
     { name = "matplotlib" },

@@ -1,7 +1,7 @@
 """FCS 2.0 / 3.0 / 3.1 list-mode reader: the TEXT keywords and the events, one array per
 channel. numpy only.
 
-    python -m quickflow.fcs FILE.fcs      prints the keywords and the channels
+    python -m flowless.fcs FILE.fcs      prints the keywords and the channels
 """
 
 from __future__ import annotations

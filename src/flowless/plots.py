@@ -78,7 +78,8 @@ OPTIONS = [
     _o("neg_suffix", "after the negative control's name", "Text", "text", "", scope="fig",
        shown=False, tip='e.g. " (neg. ctrl)" - or give the label an alias (▤)'),
     _o("x_lo", "x from 10^", "Axes", "int", 0, lo=0, hi=9, shown=False),
-    _o("x_hi", "x up to 10^ (0: the scale's top)", "Axes", "int", 0, lo=0, hi=9, shown=False),
+    _o("x_hi", "x up to 10^", "Axes", "int", 0, lo=0, hi=9, shown=False,
+       zero="the scale's top"),
     _o("size_of", "the size is the", "Layout", "choice", "panel", scope="fig", bar=True,
        choices=[("panel", "panel"), ("plot", "plot")],
        tip="panel: its place in the grid, the title, ranges and axis labels inside it; "
@@ -90,23 +91,20 @@ OPTIONS = [
        suffix=" mm", scope="fig", bar=True),
     _o("max_w", "figure width at most", "Layout", "float", 180.0, lo=40, hi=800, step=5,
        suffix=" mm", scope="fig", bar=True,
-       tip="panels go on as many columns as fit, then a new row"),
-    _o("cols", "columns (0: as many as fit)", "Layout", "int", 0, lo=0, hi=12, scope="fig",
-       bar=True, tip="a row holds at most this many panels"),
+       tip="wider: the figure isn't drawn (red) until a panel is moved back or this "
+           "raised"),
+    _o("cols", "columns", "Layout", "int", 0, lo=0, hi=12, scope="fig", bar=True,
+       zero="as many as fit",
+       tip="the panels in rows of this many, in the list's order: the places they were "
+           "dragged to are reset"),
     _o("legend", "legend", "Layout", "choice", "bottom", scope="fig", bar=True,
        choices=[("below the figure", "bottom"), ("above the figure", "top"),
                 ("right of the figure", "right"), ("in the grid, at its place", "grid"),
                 ("in each panel", "panel"), ("none", "none")]),
-    _o("legend_join", "in the grid, with", "Legend", "choice", "", scope="fig",
-       choices=[("its own place", ""), ("the panel above", "above"),
-                ("the panel below", "below"), ("the panel on the left", "left"),
-                ("the panel on the right", "right")],
-       tip="the legend and that panel share their two places: the plot keeps its size, "
-           "centred in the room the legend leaves on its side"),
-    _o("legend_cols", "columns (0: as many as fit)", "Legend", "int", 0, lo=0, hi=12,
-       scope="fig"),
-    _o("legend_rows", "lines (0: as the columns give)", "Legend", "int", 0, lo=0, hi=12,
-       scope="fig", tip="the entries on this many lines: sets the columns"),
+    _o("legend_cols", "columns", "Legend", "int", 0, lo=0, hi=12, scope="fig",
+       zero="as many as fit"),
+    _o("legend_rows", "lines", "Legend", "int", 0, lo=0, hi=12, scope="fig",
+       zero="as needed", tip="the entries on this many lines: sets the columns"),
     _o("legend_h", "across", "Legend", "choice", "left", scope="fig",
        choices=[("left", "left"), ("centred", "center"), ("right", "right")],
        tip="in its place: a grid cell, the band above / below, the column on the right"),
@@ -125,8 +123,8 @@ OPTIONS = [
 ]
 SPEC = {o["key"]: o for o in OPTIONS}
 DEFAULTS = {o["key"]: o["default"] for o in OPTIONS}
-LEGEND_KEYS = ["legend", "legend_pt", "legend_join", "legend_cols", "legend_rows", "legend_h",
-               "legend_v", "legend_dx", "legend_dy", "legend_space"]
+LEGEND_KEYS = ["legend", "legend_pt", "legend_cols", "legend_rows", "legend_h", "legend_v",
+               "legend_dx", "legend_dy", "legend_space"]
 PRESETS = {
     "colour": dict(bw=False, layout="overlay", fill=True, fill_alpha=0.30, lw=1.1, axis_lw=0.6,
                    title_pt=9.0, label_pt=8.0, xtick_pt=7.0, ytick_pt=7.0, gate_pt=7.0,
@@ -231,6 +229,39 @@ def grid_places(items: list[dict], per_row: int) -> list[tuple[int, int]]:
             r, c = r + 1, 0
         out.append((r, c))
         c += 1
+    return out
+
+
+def _overlap(a, b) -> bool:
+    return a[0] < b[0] + b[2] and b[0] < a[0] + a[2] and a[1] < b[1] + b[3] and \
+        b[1] < a[1] + a[3]
+
+
+def free_place(taken, w: int, h: int, per_row: int) -> tuple[int, int]:
+    """The first place, row by row, where a w × h item (half cells) overlaps none of
+    *taken* [(x, y, w, h)], *per_row* panels wide; else below them all."""
+    taken = list(taken)
+    bottom = max((y + hh for _, y, _, hh in taken), default=0)
+    for y in range(0, bottom, 2):
+        for x in range(0, max(2 * per_row - w, 0) + 1, 2):
+            if not any(_overlap((x, y, w, h), t) for t in taken):
+                return x, y
+    return 0, bottom
+
+
+def arrange(grid: list, per_row: int, legend: tuple[int, int]) -> dict:
+    """{index: (x, y, w, h)} of the grid's items [(index, item)] in half cells (y down; a
+    panel 2 × 2, the legend *legend*): while no item has a place of its own ("at", where it
+    was dragged), in rows as listed (a row ends when full or before a "newrow" item, the
+    legend a whole cell); else each at its own, one without it at the first free place."""
+    if not any(p.get("at") for _, p in grid):
+        return {i: (2 * c, 2 * r, 2, 2)
+                for (i, _), (r, c) in zip(grid, grid_places([p for _, p in grid], per_row))}
+    size = {i: legend if p.get("kind") == "legend" else (2, 2) for i, p in grid}
+    out = {i: (*p["at"], *size[i]) for i, p in grid if p.get("at")}
+    for i, p in grid:
+        if i not in out:
+            out[i] = (*free_place(out.values(), *size[i], per_row), *size[i])
     return out
 
 
@@ -697,14 +728,15 @@ def _legend_entries(exp, items, styles, o):
     return [_handle(st, o) for st in out.values()], list(out)
 
 
-def _legend_size(names, o, width_mm: float | None):
+def _legend_size(names, o, width_mm: float | None, margins: bool = True):
     """(columns, width mm, height mm) of a legend of *names*: on the lines set, else in the
-    columns set, else as many as fit in *width_mm* (None: one)."""
+    columns set, else as many as fit in *width_mm* (None: one); *margins*: with its margin
+    across and offset down (a place in the grid holds them inside)."""
     em = o["legend_pt"] * PT
     entry = (2.6 + 1.6) * em + max((len(n) for n in names), default=0) * 0.55 * em
     line = o["legend_pt"] * (1.0 + o["legend_space"]) * PT
-    dx = o["legend_dx"] if o["legend_h"] != "center" else 0.0
-    dy = abs(o["legend_dy"])
+    dx = o["legend_dx"] if o["legend_h"] != "center" and margins else 0.0
+    dy = abs(o["legend_dy"]) if margins else 0.0
     n = max(len(names), 1)
     cols = (math.ceil(n / o["legend_rows"]) if o["legend_rows"] else o["legend_cols"] or
             (max(1, int((width_mm - dx) // entry)) if width_mm else 1))
@@ -728,7 +760,7 @@ def _put_legend(fig, handles, names, rect, o, W, H, ncol=1):
 
 
 def figure(exp, fig: Figure | None = None, draw: bool = True, style: dict | None = None):
-    """The figure. Each item's place is kept on it (`fig.quickflow_cells`: [(index in
+    """The figure. Each item's place is kept on it (`fig.flowless_cells`: [(index in
     panels(), (x0, y0, x1, y1) as fractions of the figure)]). draw=False: (width, height)
     in mm only. *style*: options to use over the figure's (a colour / B&W export)."""
     import matplotlib as mpl
@@ -744,17 +776,20 @@ def figure(exp, fig: Figure | None = None, draw: bool = True, style: dict | None
     plot = o["size_of"] == "plot"
     cw, aw = (pw + L + R, pw) if plot else (pw, max(pw - L - R, 5.0))
     ch, ah = (ph + T + B, ph) if plot else (ph, max(ph - T - B, 5.0))
-    gcols, leg_w, _ = _legend_size(names, o, None)
-    leg_w = leg_w if place == "right" and names else 0.0
+    gcols, gw, gh = _legend_size(names, o, None, margins=False)
+    leg_w = _legend_size(names, o, None)[1] if place == "right" and names else 0.0
     fit = max(1, int((o["max_w"] - leg_w + 0.05) // cw))     # a switch's rounding: same fit
     per_row = min(o["cols"] or fit, fit)
-    places = grid_places([p for _, p in grid], per_row)
-    cols = max([c + 1 for _, c in places] or [1])
-    rows = max([r + 1 for r, _ in places] or [1])
-    W = cols * cw + leg_w
+    leg = (max(1, math.ceil(gw / (cw / 2) - 0.01)), max(1, math.ceil(gh / (ch / 2) - 0.01)))
+    at = arrange(grid, per_row, leg)
+    gx0, gy0 = min((v[0] for v in at.values()), default=0), min((v[1] for v in at.values()),
+                                                                 default=0)
+    gx1 = max((v[0] + v[2] for v in at.values()), default=0)
+    gy1 = max((v[1] + v[3] for v in at.values()), default=0)
+    W = (gx1 - gx0) * cw / 2 + leg_w
     lcols, _, leg_h = _legend_size(names, o, W) if place in ("top", "bottom") and names \
         else (1, 0, 0.0)
-    H = rows * ch + leg_h
+    H = (gy1 - gy0) * ch / 2 + leg_h
     if not draw:
         return W, H
     with mpl.rc_context(_rc()):
@@ -765,22 +800,34 @@ def figure(exp, fig: Figure | None = None, draw: bool = True, style: dict | None
             fig.set_size_inches(W / 25.4, H / 25.4)
         clear = o["background"] == "none"
         fig.patch.set_facecolor("none" if clear else "white")
-        fig.quickflow_cells = []
-        fig.quickflow_grid = {"places": {i: rc for (i, _), rc in zip(grid, places)},
-                              "rows": rows, "cols": cols, "per_row": per_row,
-                              "cell": (cw, ch),
-                              "origin": (0.0, leg_h if place == "top" else 0.0)}
+        fig.flowless_cells = []
+        if any(p.get("at") for _, p in grid) or not grid:
+            nxt = free_place(at.values(), 2, 2, per_row)
+        else:
+            r, c = grid_places([p for _, p in grid] + [{}], per_row)[-1]
+            nxt = (2 * c, 2 * r)
+        top = leg_h if place == "top" else 0.0
+        wide = W > o["max_w"] + 0.05
+        fig.flowless_grid = {"at": at, "origin": (gx0, gy0), "cell": (cw, ch), "top": top,
+                              "next": nxt, "legend": leg, "per_row": per_row, "wide": wide}
         if not grid and not names:
             fig.text(0.5, 0.5, "Nothing to plot yet: add FCS files (or a panel with +)",
                      ha="center", va="center", color=MUTED, fontsize=8)
             return fig
-        y_top = H - (leg_h if place == "top" else 0)
-        cell = {i: (c * cw, y_top - (r + 1) * ch, (c + 1) * cw, y_top - r * ch)
-                for (i, _), (r, c) in zip(grid, places)}   # mm: x0, y0, x1, y1 (bottom up)
-        gcols = _join(cell, grid, places, names, o) or gcols
+        y_top = H - top
+        hw, hh = cw / 2, ch / 2
+        cell = {i: ((x - gx0) * hw, y_top - (y - gy0 + h) * hh, (x - gx0 + w) * hw,
+                    y_top - (y - gy0) * hh) for i, (x, y, w, h) in at.items()}  # mm, bottom up
+        if wide:                       # the boxes still show it, to move a panel back
+            fig.flowless_cells = [(i, (a / W, b / H, c / W, d / H))
+                                   for i, (a, b, c, d) in cell.items()]
+            fig.text(0.5, 0.5, f"{W:.0f} mm wide: more than the {o['max_w']:.0f} mm set.\n"
+                     "Move a panel back, or raise the width.", ha="center", va="center",
+                     color="#e34948", fontsize=9)
+            return fig
         for i, p in grid:
             x0, y0, x1, y1 = cell[i]
-            fig.quickflow_cells.append((i, (x0 / W, y0 / H, x1 / W, y1 / H)))
+            fig.flowless_cells.append((i, (x0 / W, y0 / H, x1 / W, y1 / H)))
             if p.get("kind") == "legend":
                 if handles:
                     _put_legend(fig, handles, names, cell[i], o, W, H, gcols)
@@ -810,43 +857,8 @@ def figure(exp, fig: Figure | None = None, draw: bool = True, style: dict | None
                 b = 0 if place == "bottom" else H - leg_h
                 mm = (0, b, W, b + leg_h)
                 _put_legend(fig, handles, names, mm, o, W, H, lcols)
-            fig.quickflow_cells.append((li, (mm[0] / W, mm[1] / H, mm[2] / W, mm[3] / H)))
+            fig.flowless_cells.append((li, (mm[0] / W, mm[1] / H, mm[2] / W, mm[3] / H)))
     return fig
-
-
-def _join(cell, grid, places, names, o) -> int:
-    """The legend in the grid sharing a neighbour panel's place (legend_join): the two
-    cells one area, the legend on its side of it at its size, the panel's cell centred in
-    the rest (the plot keeps its size). Changes *cell* in place; returns the legend's
-    columns (above / below a panel: as many as fit), 0 if not joined."""
-    d = {"above": (-1, 0), "below": (1, 0), "left": (0, -1), "right": (0, 1)}.get(
-        o["legend_join"])
-    at = {rc: i for (i, _), rc in zip(grid, places)}
-    li = next((i for i, p in grid if p.get("kind") == "legend"), None)
-    if d is None or li is None:
-        return 0
-    r, c = next(rc for (i, _), rc in zip(grid, places) if i == li)
-    pi = at.get((r + d[0], c + d[1]))
-    if pi is None:
-        return 0
-    (lx0, ly0, lx1, ly1), (px0, py0, px1, py1) = cell[li], cell[pi]
-    x0, y0, x1, y1 = min(lx0, px0), min(ly0, py0), max(lx1, px1), max(ly1, py1)
-    cols, lw, lh = _legend_size(names, o, px1 - px0 if d[0] else None)
-    if d[0]:                                       # one above the other
-        lh = min(lh, (y1 - y0) - (py1 - py0))      # the plot keeps its size
-        top = ly1 > py1                            # the legend's side: where it was
-        cell[li] = (x0, y1 - lh, x1, y1) if top else (x0, y0, x1, y0 + lh)
-        b = (y0 + (y1 - lh - y0 - (py1 - py0)) / 2) if top else \
-            (y0 + lh + (y1 - y0 - lh - (py1 - py0)) / 2)
-        cell[pi] = (px0, b, px1, b + py1 - py0)
-    else:                                          # side by side
-        lw = min(lw, (x1 - x0) - (px1 - px0))
-        left = lx0 < px0
-        cell[li] = (x0, y0, x0 + lw, y1) if left else (x1 - lw, y0, x1, y1)
-        a = (x0 + lw + (x1 - x0 - lw - (px1 - px0)) / 2) if left else \
-            (x0 + (x1 - lw - x0 - (px1 - px0)) / 2)
-        cell[pi] = (a, py0, a + px1 - px0, py1)
-    return cols
 
 
 def _handle(sty, o):

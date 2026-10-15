@@ -1,16 +1,16 @@
 @echo off
 setlocal enabledelayedexpansion
-title QuickFlow uninstaller
+title Flowless uninstaller
 
-rem QuickFlow makes NO PATH or registry changes, so removing its runtime folder
+rem Flowless makes NO PATH or registry changes, so removing its runtime folder
 rem removes every trace it left. What "removing" means depends on where it went:
-rem   private root -> the whole folder is QuickFlow's, nothing else can be in it
+rem   private root -> the whole folder is Flowless's, nothing else can be in it
 rem   shared root  -> the Python, uv.exe and package cache are shared with any
 rem                   other tool set up this way, so there is a real choice, and
 rem                   this script asks instead of guessing.
 set "SHARED_ROOT=C:\ProgramData\PyApps"
-set "PRIVATE_ROOT=C:\Users\Public\QuickFlow"
-set "ENVNAME=quickflow"
+set "PRIVATE_ROOT=C:\Users\Public\Flowless"
+set "ENVNAME=flowless"
 set "OWNENV=%SHARED_ROOT%\envs\%ENVNAME%"
 
 set "HAVE_PRIVATE="
@@ -19,7 +19,7 @@ if exist "%PRIVATE_ROOT%\uv.exe" set "HAVE_PRIVATE=1"
 if exist "%OWNENV%" set "HAVE_SHARED=1"
 
 if not defined HAVE_PRIVATE if not defined HAVE_SHARED (
-    echo Nothing to remove - no QuickFlow runtime found in:
+    echo Nothing to remove - no Flowless runtime found in:
     echo     %PRIVATE_ROOT%
     echo     %OWNENV%
     pause
@@ -28,7 +28,7 @@ if not defined HAVE_PRIVATE if not defined HAVE_SHARED (
 
 rem --- private install: one folder, only ours. Nothing to weigh up. ---
 if defined HAVE_PRIVATE (
-    echo This will delete the private QuickFlow runtime:
+    echo This will delete the private Flowless runtime:
     echo     %PRIVATE_ROOT%
     echo (Python, virtual env, uv.exe and cache - approx 1.4 GB.^)
     echo Nothing outside that folder uses it.
@@ -51,10 +51,10 @@ for /d %%D in ("%SHARED_ROOT%\envs\*") do (
     if /I not "%%~nxD"=="%ENVNAME%" set "OTHERS=!OTHERS! %%~nxD"
 )
 
-echo QuickFlow uses the shared runtime folder:
+echo Flowless uses the shared runtime folder:
 echo     %SHARED_ROOT%
 echo.
-echo   [1] Remove QuickFlow only  (recommended^)
+echo   [1] Remove Flowless only  (recommended^)
 echo       Deletes %OWNENV%,
 echo       the Desktop shortcut and the Start menu entry. The shared Python,
 echo       uv.exe and package cache stay, so anything else using them keeps working.
@@ -112,7 +112,7 @@ echo Removing %~1 ...
 rmdir /s /q "%~1"
 if exist "%~1" (
     echo.
-    echo Could not fully remove it. Close QuickFlow if it is running,
+    echo Could not fully remove it. Close Flowless if it is running,
     echo then run this uninstaller again.
     pause
     exit /b 1
@@ -123,6 +123,6 @@ exit /b 0
 rem Desktop shortcut (made by the launcher) and Start menu entry (made by the app)
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "foreach ($d in 'Desktop', 'Programs') {" ^
-        "$lnk = Join-Path ([Environment]::GetFolderPath($d)) 'QuickFlow.lnk';" ^
+        "$lnk = Join-Path ([Environment]::GetFolderPath($d)) 'Flowless.lnk';" ^
         "if (Test-Path $lnk) { Remove-Item $lnk -Force } }"
 exit /b 0

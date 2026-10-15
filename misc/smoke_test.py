@@ -23,19 +23,19 @@ def main(argv) -> int:
     from PySide6.QtGui import QKeyEvent
     from PySide6.QtWidgets import QApplication
 
-    from quickflow import __main__ as entry
-    from quickflow import app as qapp
-    from quickflow import model
+    from flowless import __main__ as entry
+    from flowless import app as qapp
+    from flowless import model
 
     assert "matplotlib" not in sys.modules, "the window module must not load matplotlib"
-    from quickflow import report
+    from flowless import report
     args = [a for a in argv if not a.startswith("--")]
     shots = Path(argv[argv.index("--shots") + 1]) if "--shots" in argv else None
     if shots:
         args = [a for a in args if Path(a) != shots]
     data = Path(args[0]) if args else ROOT.parent / "data" / "data"
     run = data / "20260629_145214"
-    out = Path(tempfile.mkdtemp(prefix="quickflow_smoke_"))
+    out = Path(tempfile.mkdtemp(prefix="flowless_smoke_"))
     qapp.OPTIONS = out / "options.json"                  # leave the real options alone
 
     a = QApplication.instance() or QApplication([])
@@ -155,7 +155,7 @@ def main(argv) -> int:
     a.sendEvent(g.ch, ev)
     assert g.ch.currentIndex() == i0, "the wheel changed a list"
     # gates exported as Gating-ML 2.0, nested; the report names the file while they're unchanged
-    from quickflow.imports import gatingml
+    from flowless.imports import gatingml
     import xml.etree.ElementTree as ET
     g.new_range()
     nx = gatingml.write(w.exp, out / "gates.xml")
@@ -186,7 +186,7 @@ def main(argv) -> int:
  <gating:RectangleGate gating:id="Logged"><gating:dimension gating:min="2" gating:transformation-ref="T1">
   <data-type:fcs-dimension data-type:name="FL2-A"/></gating:dimension></gating:RectangleGate>
 </gating:Gating-ML>""", encoding="utf-8")
-    from quickflow import imports
+    from flowless import imports
     assert imports.kind(out / "other.xml") == "gatingml" and imports.kind(out / "gates.xml")
     (out / "not.xml").write_text("<root/>", encoding="utf-8")
     assert imports.kind(out / "not.xml") == ""
@@ -210,7 +210,7 @@ def main(argv) -> int:
     assert g.warn.isVisibleTo(g) and "hi 9" in g.warn.text(), g.warn.text()
     assert not any(r["sub-population"] == "hi 9" for r in report.summary_rows(w.exp))
     g._use(str(len(gs) - 2))
-    from quickflow import plots
+    from flowless import plots
     assert plots.measured(w.exp, g.group) == "gate 9" and not g.warn.isVisibleTo(g)
     sr = [r for r in report.summary_rows(w.exp) if r["group"] == g.group]
     assert any(r["sub-population"] == "hi 9" for r in sr), "the summary follows the figure"
@@ -312,7 +312,7 @@ def main(argv) -> int:
     assert first.name not in g.one().gates
 
     # the figure: panels, options, the preview
-    from quickflow import plots
+    from flowless import plots
     w.tabs.setCurrentIndex(2)
     f = w.figure_tab
     n = len(f.panels())
@@ -325,7 +325,7 @@ def main(argv) -> int:
     a.processEvents()
     f.render()
     assert len(f.panels()) == n + 1 and f.panels()[1]["kind"] == "dot", f.panels()
-    x0, y0, x1, y1 = dict(f.fig.quickflow_cells)[1]
+    x0, y0, x1, y1 = dict(f.fig.flowless_cells)[1]
     f.view.clicked.emit((x0 + x1) / 2, (y0 + y1) / 2)
     assert f.sel == 1, f.sel
     f._set("lw", 2.0, f.panels()[f.sel])
@@ -333,54 +333,81 @@ def main(argv) -> int:
     from PySide6.QtWidgets import QDoubleSpinBox, QSpinBox
     spins = f.opt_box.findChildren(QDoubleSpinBox)
     assert spins and all("," not in x.text() for x in spins), [x.text() for x in spins]
-    from quickflow.figtab import Num
+    from flowless.figtab import Num
     n = Num(singleStep=0.1)
     assert n.valueFromText("0.75") == 0.75 and n.textFromValue(1.1) == "1.1" and \
         n.textFromValue(0.75) == "0.75"
     f._set("axis_lw", 1.5, None)
     f.render()
     assert any(abs(sp.get_linewidth() - 1.5) < 1e-6 for ax in f.fig.axes for sp in ax.spines.values())
-    # the layout, with the mouse: + adds a panel (3 + 1), one dragged down makes 2 × 2, the
-    # legend into the grid, then above the figure
+    # the layout, with the mouse: + adds a panel (3 + 1), one dragged down makes 2 × 2 and
+    # nothing else moves; over another box: not taken; half a panel down; too wide: red, not
+    # drawn; the legend into the grid, then above the figure; the list's order moves nothing
     from PySide6.QtCore import QPoint
     from PySide6.QtTest import QTest
     sc = f.schema
     a.processEvents()
 
-    def places():
-        return dict(f.fig.quickflow_grid["places"])
+    def at():
+        return {i: tuple(v[:2]) for i, v in f.fig.flowless_grid["at"].items()}
 
     def drag(src, dst):
-        src, dst = src.toPoint() if hasattr(src, "toPoint") else src, dst
+        src = src.toPoint() if hasattr(src, "toPoint") else src
         QTest.mousePress(sc, Qt.LeftButton, Qt.NoModifier, src)
         QTest.mouseMove(sc, src + QPoint(12, 12))
         QTest.mouseMove(sc, dst)
         QTest.mouseRelease(sc, Qt.LeftButton, Qt.NoModifier, dst)
         a.processEvents()
 
+    def spot(i, x, y):                         # the pointer that puts item i at (x, y)
+        w_, h_ = sc._size(i)
+        return sc._px(*sc._half(x + w_ / 2, y + h_ / 2, 0, 0)).topLeft().toPoint()
+
     assert len(sc._boxes()) == len(f.panels()), (sc._boxes(), f.panels())
-    assert f.fig.quickflow_grid["per_row"] == 3 and len(places()) == 3, f.fig.quickflow_grid
+    assert sorted(at().values()) == [(0, 0), (2, 0), (4, 0)], at()
     QTest.mouseClick(sc, Qt.LeftButton, Qt.NoModifier, sc._px(*sc._ghost()).center().toPoint())
-    assert len(places()) == 4 and sorted(places().values())[-1] == (1, 0), places()
-    third = next(i for i, rc in places().items() if rc == (0, 2))
-    fourth = next(i for i, rc in places().items() if rc == (1, 0))
-    b = sc._boxes()
-    drag(b[third].center(), QPoint(int(b[fourth].left()) + 4, int(b[fourth].center().y())))
-    assert sorted(places().values()) == [(0, 0), (0, 1), (1, 0), (1, 1)], places()
-    b, li = sc._boxes(), sc.legend_i
-    last = max((i for i, rc in places().items() if rc[0] == 1), key=lambda i: places()[i][1])
-    drag(b[li].center(), QPoint(int(b[last].right()) + 15, int(b[last].center().y())))
-    assert plots.options(w.exp)["legend"] == "grid" and places()[sc.legend_i] == (1, 2), places()
-    drag(sc._boxes()[sc.legend_i].center(), sc._zones()["top"].center().toPoint())
-    assert plots.options(w.exp)["legend"] == "top" and sorted(places().values()) == \
-        [(0, 0), (0, 1), (1, 0), (1, 1)], places()
+    assert sorted(at().values()) == [(0, 0), (0, 2), (2, 0), (4, 0)], at()
+    third = next(i for i, v in at().items() if v == (4, 0))
+    drag(sc._boxes()[third].center(), spot(third, 2, 2))
+    assert sorted(at().values()) == [(0, 0), (0, 2), (2, 0), (2, 2)], at()
+    keep = at()
+    drag(sc._boxes()[third].center(), spot(third, 1, 1))
+    assert at() == keep, "over the others: not taken"
+    drag(sc._boxes()[third].center(), spot(third, 4, 1))
+    assert at()[third] == (4, 1) and {i: v for i, v in at().items() if i != third} == \
+        {i: v for i, v in keep.items() if i != third}, at()
+    cells = dict(f.fig.flowless_cells)
+    H = f.fig.get_figheight() * 25.4
+    assert abs((1 - cells[third][3]) * H - f.fig.flowless_grid["cell"][1] / 2) < 0.01, \
+        "half a panel down"
+    assert not f.wide.isVisible() and not f.too_wide()
+    cw = f.fig.flowless_grid["cell"][0]
+    far = 2 * int(plots.options(w.exp)["max_w"] // cw)
+    drag(sc._boxes()[third].center(), spot(third, far, 1))
+    assert f.too_wide(), (at(), far, f.fig.flowless_grid["wide"], plots.figure(w.exp, draw=False))
+    assert not f.wide.isHidden(), f.wide.text()
+    assert not f.fig.axes and f.max_w_box.styleSheet() and f._refuse(), "not drawn"
+    shot("3_figure_wide")
+    w.do_undo()
+    f.refresh()
+    assert at()[third] == (4, 1) and not f.too_wide() and f.wide.isHidden()
+    li = sc.legend_i
+    drag(sc._boxes()[li].center(), spot(li, 0, 4))
+    assert plots.options(w.exp)["legend"] == "grid" and at()[li] == (0, 4), at()
+    drag(sc._boxes()[li].center(), sc._zones()["top"].center().toPoint())
+    assert plots.options(w.exp)["legend"] == "top" and li not in at(), at()
+    before = {id(q): tuple(q["at"]) for q in f.panels() if q.get("kind") != "legend"}
+    f.items.insertItem(f.items.count(), f.items.takeItem(1))
+    f._moved()
+    assert {id(q): tuple(q["at"]) for q in f.panels() if q.get("kind") != "legend"} == before
     f.schema.picked.emit(1)
     assert f.sel == 1 and f.items.currentRow() == 2, "the box picks the list's line"
     f.build_bar()
-    cols = next(x for x in f.bar_box.findChildren(QSpinBox) if x.specialValueText() == "auto")
+    cols = next(x for x in f.bar_box.findChildren(QSpinBox)
+                if x.specialValueText() == "as many as fit")
     cols.setValue(1)
     f.render()
-    assert sorted(places().values())[-1][1] == 0, "one column"
+    assert {v[0] for v in at().values()} == {0}, "one column, the places reset"
     cols.setValue(0)
     f.render()
     W0 = plots.figure(w.exp, draw=False)[0]
@@ -409,7 +436,7 @@ def main(argv) -> int:
     assert any("\n" in t.get_text() for t in titles), [t.get_text() for t in titles]
     leg = fig.legends[0].get_window_extent()
     li = next(i for i, p in enumerate(plots.panels(w.exp)) if p.get("kind") == "legend")
-    cx0 = dict(fig.quickflow_cells)[li][0] * fig.bbox.width
+    cx0 = dict(fig.flowless_cells)[li][0] * fig.bbox.width
     assert abs(leg.x0 - cx0 - 5 / 25.4 * fig.dpi) < 0.6 / 25.4 * fig.dpi, (leg.x0, cx0)
     hax = next(ax for ax in fig.axes if ax.get_xscale() == "log")
     shown = [t for t in hax.get_xticklabels() if t.get_text() and
@@ -441,30 +468,33 @@ def main(argv) -> int:
     assert abs(W1 - W0) < 0.1 and abs(H1 - H0) < 0.5, (W0, H0, W1, H1)
     w.do_undo()
     assert plots.options(w.exp)["size_of"] == "panel"
-    # the legend on 2 lines, sharing the place of the panel below it (9b.png)
+    # 9b.png: the legend on 2 lines in half a place, a panel half a place below it
     keep = json.loads(json.dumps(w.exp.figure))
+    w.exp.figure["options"].update(legend="grid", legend_rows=2)
+    f.render()
+    lw, lh = f.fig.flowless_grid["legend"]
     own = f._own_panels()
-    leg = next(p for p in own if p.get("kind") == "legend")
-    own.remove(leg)
-    own.insert(0, leg)
-    for p in own:
-        p.pop("newrow", None)
-    own[1]["newrow"] = True
-    w.exp.figure["options"].update(legend="grid", legend_join="below", legend_rows=2)
+    leg = next(q for q in own if q.get("kind") == "legend")
+    pan = [q for q in own if q.get("kind") != "legend"]
+    leg["at"], pan[0]["at"] = [0, 0], [0, lh]
+    x0 = max(lw, 2) + max(lw, 2) % 2
+    for k, q in enumerate(pan[1:]):
+        q["at"] = [x0 + 2 * (k % 2), 2 * (k // 2)]
+    w.exp.figure["options"]["max_w"] = 800.0
     fig = plots.figure(w.exp)
-    cells = dict(fig.quickflow_cells)
-    (lx0, ly0, lx1, ly1), (px0, py0, px1, py1) = cells[0], cells[1]
-    assert ly0 >= py1 - 1e-9 and ly1 - ly0 < py1 - py0, (cells[0], cells[1])
+    cells, ch = dict(fig.flowless_cells), fig.flowless_grid["cell"][1]
+    H = fig.get_figheight() * 25.4
+    li, pi = own.index(leg), own.index(pan[0])
+    assert lh == 1 and abs((cells[li][3] - cells[li][1]) * H - ch / 2) < 0.01, (lh, cells[li])
+    assert abs((1 - cells[pi][3]) * H - ch / 2) < 0.01, "the panel under the legend"
     assert len({mm(ax) for ax in fig.axes}) == 1, [mm(ax) for ax in fig.axes]
     n = len(fig.legends[0].get_texts())
     assert fig.legends[0]._ncols == -(-n // 2), (n, fig.legends[0]._ncols)
-    f.render()
-    assert tuple(f.schema.cell) == fig.quickflow_grid["cell"], (f.schema.cell, "a grid cell")
+    f.refresh()
+    shot("3_figure_panels")
     w.exp.figure.clear()
     w.exp.figure.update(keep)
     f.refresh()
-    f.refresh()
-    shot("3_figure_panels")
     f.items.setCurrentRow(0)
     f.preset.setCurrentText("colour")
     f._apply_preset()

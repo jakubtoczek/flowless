@@ -1,4 +1,4 @@
-"""Generate the QuickFlow app icon: two overlaid fluorescence histograms on a dark rounded
+"""Generate the Flowless app icon: two overlaid fluorescence histograms on a dark rounded
 tile - a grey control peak and a blue stained one shifted right. Run: python misc/make_icon.py"""
 
 import math
@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-OUT = Path(__file__).resolve().parent.parent / "src" / "quickflow" / "assets"
+OUT = Path(__file__).resolve().parent.parent / "src" / "flowless" / "assets"
 
 
 def _peak(ss, centre, width, height, base):
@@ -41,9 +41,9 @@ def main():
     OUT.mkdir(parents=True, exist_ok=True)
     sizes = [16, 32, 48, 64, 128, 256]
     imgs = [render(s) for s in sizes]
-    imgs[-1].save(OUT / "quickflow.png")
-    imgs[-1].save(OUT / "quickflow.ico", sizes=[(s, s) for s in sizes])
-    print("wrote", OUT / "quickflow.ico", "and quickflow.png")
+    imgs[-1].save(OUT / "flowless.png")
+    imgs[-1].save(OUT / "flowless.ico", sizes=[(s, s) for s in sizes])
+    print("wrote", OUT / "flowless.ico", "and flowless.png")
 
 
 if __name__ == "__main__":

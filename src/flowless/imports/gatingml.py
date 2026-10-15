@@ -86,7 +86,7 @@ def read(path) -> tuple[list[dict], list[str]]:
         gid = e.get(f"{GATING}id")
         if not gid:
             continue
-        info = next((x for x in e.iter() if _tag(x) == "quickflow"), None)
+        info = next((x for x in e.iter() if _tag(x) in ("flowless", "quickflow")), None)
         name = info.get("name") if info is not None else gid
         names[gid] = name
         g = shape(e) if _plain(e) else None
@@ -111,7 +111,7 @@ def read(path) -> tuple[list[dict], list[str]]:
 
 
 def apply(exp, path) -> list[str]:
-    """The file's gates into the experiment: a gate written for a group (by QuickFlow) to
+    """The file's gates into the experiment: a gate written for a group (by Flowless) to
     that group; gates without one (another program's) to every group. Each group read
     gets these gates in place of its own (the samples' own versions dropped). The log."""
     from ..model import Gate
@@ -156,7 +156,7 @@ def write(exp, path) -> int:
             if g.parent in ids:
                 e.set(f"{{{G}}}parent_id", ids[g.parent])
             info = ET.SubElement(e, f"{{{D}}}custom_info")
-            ET.SubElement(info, "quickflow", group=group, name=g.name)
+            ET.SubElement(info, "flowless", group=group, name=g.name)
             for ch in [g.x, g.y] if g.kind == "polygon" else [g.x]:
                 d = ET.SubElement(e, f"{{{G}}}dimension", {f"{{{G}}}compensation-ref": "uncompensated"})
                 if g.kind == "range":

@@ -9,7 +9,7 @@ the same statistics on the *marker* channel. The single-marker analysis (overlay
 + one value per population) is built on that; more markers, quadrants or titrations would
 add a gate kind or a statistic, not a new model.
 
-    python -m quickflow.model --self-check [DATA]   counts and values against FlowJo
+    python -m flowless.model --self-check [DATA]   counts and values against FlowJo
 """
 
 from __future__ import annotations
@@ -365,7 +365,7 @@ class Experiment:
                 except ValueError:                        # another drive
                     d["rel"] = ""
             samples.append(d)
-        return {"quickflow": __version__, "marker": self.marker, "stat": self.stat,
+        return {"flowless": __version__, "marker": self.marker, "stat": self.stat,
                 "samples": samples,
                 "gates": {g: [asdict(x) for x in gs] for g, gs in self.gates.items()},
                 "record": self.record, "figure": self.figure, "aliases": self.aliases,
@@ -413,8 +413,8 @@ class Experiment:
     @classmethod
     def open(cls, path) -> tuple["Experiment", list[str]]:
         d = json.loads(Path(path).read_text(encoding="utf-8"))
-        if "quickflow" not in d:
-            raise ValueError(f"{Path(path).name}: not a QuickFlow experiment")
+        if "flowless" not in d and "quickflow" not in d:     # quickflow: its first name
+            raise ValueError(f"{Path(path).name}: not a Flowless experiment")
         return cls.from_dict(d, str(Path(path).resolve()))
 
 
