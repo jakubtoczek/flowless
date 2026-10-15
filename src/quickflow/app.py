@@ -95,7 +95,10 @@ def app_icon():
 def load_options() -> dict:
     try:
         d = json.loads(OPTIONS.read_text(encoding="utf-8"))
-        return {**copy.deepcopy(DEFAULT_OPTIONS), **(d if isinstance(d, dict) else {})}
+        d = d if isinstance(d, dict) else {}
+        if "tick_pt" in (d.get("figure_options") or []):     # one tick size before x / y
+            d["figure_options"] += ["xtick_pt", "ytick_pt"]
+        return {**copy.deepcopy(DEFAULT_OPTIONS), **d}
     except (OSError, ValueError):
         return copy.deepcopy(DEFAULT_OPTIONS)
 
@@ -500,16 +503,16 @@ class SamplesTab(QWidget):
         tree = exp.tree(s)
         first = next((g for g in tree if not g.parent and g.kind == "polygon"), None)
         x, y = (first.x, first.y) if first else ("FSC-A", "SSC-A")
-        o = {**plots.options(exp), "title_pt": 8.5, "label_pt": 8, "tick_pt": 7, "gate_pt": 7,
-             "legend": "none"}
+        o = {**plots.options(exp), "title_pt": 8.5, "label_pt": 8, "xtick_pt": 7, "ytick_pt": 7,
+             "gate_pt": 7, "legend": "none"}
         dot, hist = self.canvases
         a1, a2 = dot.figure.axes[0], hist.figure.axes[0]
         drawn = [g for g in tree if not g.parent and g.kind == "polygon" and (g.x, g.y) == (x, y)]
         plots.dot_axes(a1, exp, [s], x, y, "", drawn, o)
         a2.clear()
-        plots.hist_axes(a2, exp, {"group": s.group}, o, plots.series_style(exp, o), only=[s])
-        a2.set_title(f"{exp.name('label', s.label)} › {exp.main_population(s.group)}",
-                     fontsize=8.5)
+        plots.hist_axes(a2, exp, {"group": s.group, "title": f"{exp.name('label', s.label)} › "
+                                  f"{exp.main_population(s.group)}"},
+                        o, plots.series_style(exp, o), only=[s])
         self.quick_title.setText(f"{exp.name('group', s.group)} · {exp.name('label', s.label)}"
                                  f" — {Path(s.path).name}")
         for c in self.canvases:
@@ -946,6 +949,8 @@ class AliasDialog(QDialog):
             a.setToolTip("empty: the name itself")
             t.setItem(r, 2, a)
         fit_columns(t, 300)
+        QShortcut(QKeySequence.Copy, t, self._copy, context=Qt.WidgetShortcut)
+        QShortcut(QKeySequence.Paste, t, self._paste, context=Qt.WidgetShortcut)
         self.remember = QCheckBox("remember them for the next experiments (same names)")
         self.remember.setChecked(True)
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -953,11 +958,24 @@ class AliasDialog(QDialog):
         bb.rejected.connect(self.reject)
         v = QVBoxLayout(self)
         v.addWidget(QLabel("Double-click a 'shown as' cell to type the name to show — e.g. "
-                           "FL2-A :: PE-A → anti-His PE, or a cell line's full name."))
+                           "FL2-A :: PE-A → anti-His PE, or a cell line's full name. Ctrl+C "
+                           "copies a name, Ctrl+V pastes it as the selected rows' 'shown as'. "
+                           "Labels shown under one name are one series in the figure."))
         v.addWidget(self.kind)
         v.addWidget(t, 1)
         v.addWidget(self.remember)
         v.addWidget(bb)
+
+    def _copy(self):
+        it = self.table.currentItem()
+        if it is not None:
+            QApplication.clipboard().setText(it.text())
+
+    def _paste(self):
+        text = QApplication.clipboard().text().strip()
+        for r in {i.row() for i in self.table.selectedIndexes()} or {self.table.currentRow()}:
+            if r >= 0 and not self.table.isRowHidden(r):
+                self.table.item(r, 2).setText(text)
 
     def _filter(self):
         k = self.kind.currentData()
@@ -1507,10 +1525,13 @@ class MainWindow(QMainWindow):
                 if n in known.get(kind, {}) and n not in exp.aliases.get(kind, {}):
                     exp.aliases.setdefault(kind, {})[n] = known[kind][n]
 
-    def _pool_same_named(self):
-        """Two runs' folders named alike (a space for a dash): one name, so they are
-        replicates of one condition (▤ Aliases keeps them apart again)."""
+    def _pool_same_named(self, new):
+        """Two runs' folders named alike (a space for a dash): one name for the groups just
+        added (*new*), so they are replicates of one condition (▤ Aliases keeps them apart
+        again: not redone afterwards)."""
         for g, first in self.exp.same_named().items():
+            if g not in new:
+                continue
             self.set_alias("group", g, first, remember=False)
             self.log(f"✓ '{g}' shown as '{first}' (the same name but for spaces and dashes): "
                      "another run of it — pooled as replicates in Results; ▤ Aliases to "
@@ -1593,7 +1614,7 @@ class MainWindow(QMainWindow):
                 from . import plots
                 fig["panels"] += [plots.new_panel(g) for g in new_groups]
             self._known_aliases()
-            self._pool_same_named()
+            self._pool_same_named(new_groups)
         finally:
             QApplication.restoreOverrideCursor()
         if not added and not bad:
@@ -1673,7 +1694,6 @@ class MainWindow(QMainWindow):
         self.dirty = False
         self.log(f"✓ opened {p}", *[f"⚠ {x}" for x in problems])
         self._known_aliases()
-        self._pool_same_named()
         self.undo.clear()
         self.redo.clear()
         self.refresh_all()

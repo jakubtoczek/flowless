@@ -74,9 +74,9 @@ class Schematic(QWidget):
         self.grid = dict(g.get("places", {}))
         self.rows, self.per_row = g.get("rows", 0), g.get("per_row", 1)
         cells = [self.items[i] for i in self.grid if i in self.items]
-        if cells:
-            self.cell = cells[0][2:]
-            self.origin = (min(c[0] for c in cells), min(c[1] for c in cells))
+        if cells:                     # a legend sharing a panel's place: not a cell's size
+            self.cell = g.get("cell", cells[0][2:])
+            self.origin = g.get("origin", (min(c[0] for c in cells), min(c[1] for c in cells)))
         else:
             self.rows, self.origin = 0, (0.0, 0.0)
         self.texts, self.legend_i, self.place, self.sel = texts, legend_i, place, sel
@@ -538,14 +538,16 @@ class FigureTab(QWidget):
             if w is not None:
                 w.setParent(None)
                 w.deleteLater()
-        for r, c, label, key in ((0, 0, "panel", "panel_w"), (0, 2, "×", "panel_h"),
-                                 (0, 4, "columns", "cols"), (1, 0, "width ≤", "max_w"),
-                                 (1, 2, "legend", "legend")):
+        for r, c, label, key in ((0, 0, "", "size_of"), (0, 1, "", "panel_w"),
+                                 (0, 2, "×", "panel_h"), (0, 4, "columns", "cols"),
+                                 (1, 0, "width ≤", "max_w"), (1, 2, "legend", "legend")):
             w = self._widget(key, None)
             if key == "cols":
                 w.setSpecialValueText("auto")
-            self.bar.addWidget(QLabel(label), r, c, Qt.AlignRight)
-            self.bar.addWidget(w, r, c + 1, 1, 3 if key == "legend" else 1)
+            if label:
+                self.bar.addWidget(QLabel(label), r, c, Qt.AlignRight)
+                c += 1
+            self.bar.addWidget(w, r, c, 1, 3 if key == "legend" else 1)
         guard_wheel(self.bar_box)
 
     def _box_text(self, p) -> str:
@@ -686,9 +688,16 @@ class FigureTab(QWidget):
 
     def _set(self, key, val, p):
         self._snap(key)
+        o = plots.options(self.win.exp)
+        if key == "size_of" and val != o["size_of"]:     # the figure stays: the sizes now
+            L, B, R, T, _ = plots.margins(self.win.exp, o)  # mean the plot's (or the panel's)
+            k = 1 if val == "panel" else -1
+            self.fig_dict().setdefault("options", {}).update(
+                panel_w=round(o["panel_w"] + k * (L + R), 2),
+                panel_h=round(o["panel_h"] + k * (T + B), 2))
         if p is None or plots.SPEC[key]["scope"] == "fig":
             self.fig_dict().setdefault("options", {})[key] = val
-            if key == "legend":
+            if key in ("legend", "size_of"):           # size_of: the sizes shown change
                 self.refresh()
                 return
         else:
@@ -790,14 +799,18 @@ class FigureTab(QWidget):
 
     def _series_box(self) -> QGroupBox:
         exp = self.win.exp
-        box = QGroupBox("Series — each label, in every panel")
+        box = QGroupBox("Series — each label, in every panel (one name: one series)")
         f = QFormLayout(box)
         o = plots.options(exp)
         styles = plots.series_style(exp, o)
         custom = self.fig_dict().setdefault("series", {})
-        for lab in exp.labels():
-            if not any(s.label == lab and s.plot for s in exp.samples):
+        seen = set()
+        for lab in exp.labels():               # labels under one name (▤): the first's row
+            n = exp.name("label", lab)
+            if n in seen or not any(exp.name("label", s.label) == n and s.plot
+                                    for s in exp.samples):
                 continue
+            seen.add(n)
             st = styles[lab]
             row = QHBoxLayout()
             col = QToolButton(toolTip="colour (in colour figures)")

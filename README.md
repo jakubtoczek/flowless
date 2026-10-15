@@ -78,13 +78,17 @@ wrong (✗ ⚠).
    its **values** as bars. The legend goes below, above or right of the figure, in the grid at
    its place in the list, in each panel, or nowhere. Select the first line for the whole
    figure's options, a panel for its own (they override the figure's, ↺ undoes that): style,
-   fonts (titles, axis labels, ticks, legend, range labels — a title wider than its panel
-   goes on two lines, at its size), line widths (data, axes; numbers to two decimals: 0.75
-   can be typed), fills; the legend (select it): across left / centred / right with a
-   margin, up / down with an offset, line spacing, columns; the
-   figure's size
-   (panel width and height, the width at most — panels then go on the next row), background
-   (white or transparent), and each series' colour and dashes. **style ▸ Apply**: a set of
+   fonts (titles, axis labels, x and y tick labels, legend, range labels — a title wider
+   than its panel goes on two lines, at its size), line widths (data, axes; numbers to two
+   decimals: 0.75 can be typed), fills; the legend (select it): across left / centred / right
+   with a margin, up / down with an offset, line spacing, columns or lines, and in the grid
+   the place of the panel above, below, left or right of it shared (the legend on its side,
+   the plot at its size in the rest); the figure's size (panel width and height, the width at
+   most — panels then go on the next row), background (white or transparent), and each
+   series' colour and dashes. Every plot of a figure is the same size: range brackets and
+   titles sit above the plots, the room for them taken from the margins. The size set is the
+   **panel**'s (the margins inside it) or the **plot**'s (the margins around it): switching
+   keeps the figure as it is. **style ▸ Apply**: a set of
    them at once (colour, black & white, offset, one column 85 mm, large for slides).
    *Options ▸ Figure options* sets which options are listed. In the middle, the **layout** as
    boxes, its size above them (panel width × height, columns, the width at most, the legend's
@@ -115,7 +119,9 @@ wrong (✗ ⚠).
 
 **▤ Aliases…**: what the figure, the tables and the report call the groups, labels, samples,
 channels and populations (*FL2-A :: PE-A* → *anti-His PE*); remembered for the next
-experiments with the same names.
+experiments with the same names. Ctrl+C copies a name, Ctrl+V pastes it as the selected rows'
+alias. Labels shown under one name are one series: one style, one legend entry (the controls
+of different cell lines, *0006* / *R3B23*, all *Control*).
 
 **Options…**: a page per topic — the sample columns shown; the channels offered (by default
 FSC-A, SSC-A and the areas of the fluorochromes the reagents name — heights and other
@@ -135,7 +141,8 @@ file while the gates are as in it.
 **Replicates**: groups shown under one name (▤ Aliases) are runs of one condition. Two
 groups whose names differ only by spaces, dashes or case (two runs' folders: *MDA-MB-157
 parental cells* / *MDA-MB-157-parental cells*) get one name when they come in, and the log
-says so. Their figure panels and tables add the run's day (*… · 2026-05-27*); a **Values
+says so. Their tables add the run's day (*… · 2026-05-27*), and their figure panels when
+two runs are both in the figure; a **Values
 (bars)** panel of one of them shows each label's mean over the runs ± SD, a dot per run.
 
 Numbers are written with a decimal point whatever the system's language; the mouse wheel

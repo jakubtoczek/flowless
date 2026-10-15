@@ -390,7 +390,8 @@ def main(argv) -> int:
     f.res.setValue(10)
     # titles keep their size (a long one wraps), a legend in the grid sits where set, x
     # ticks thinned to what fits, the ranges' labels apart
-    for k, v in (("title_pt", 15.0), ("tick_pt", 12.0), ("panel_w", 40.0), ("legend", "grid"),
+    for k, v in (("title_pt", 15.0), ("xtick_pt", 12.0), ("ytick_pt", 12.0), ("panel_w", 40.0),
+                 ("legend", "grid"),
                  ("legend_h", "left"), ("legend_dx", 5.0)):
         f._set(k, v, None)
     w.set_alias("group", w.exp.groups()[0], "a rather long name for this group",
@@ -418,11 +419,50 @@ def main(argv) -> int:
               ("a long range name", "another long one")]
     assert len(labels) == 2 and labels[0].get_position()[1] != labels[1].get_position()[1], \
         "two labels wider than their ranges: one row each"
+    assert all(t.get_position()[1] > 1 for t in labels), "the ranges above the plot"
+
+    def mm(ax):
+        return (round(ax.get_position().width * fig.get_figwidth() * 25.4, 2),
+                round(ax.get_position().height * fig.get_figheight() * 25.4, 2))
+
+    assert len({mm(ax) for ax in fig.axes}) == 1, [mm(ax) for ax in fig.axes]
     del rng[-2:]
     w.do_undo()
-    for _ in range(6):
+    for _ in range(7):
         w.do_undo()
     w.set_alias("group", gr, "", remember=False)
+    W0, H0 = plots.figure(w.exp, draw=False)
+    f._set("size_of", "plot", None)            # the size set is the plot's, the figure stays
+    fig = plots.figure(w.exp)
+    o = plots.options(w.exp)
+    assert {mm(ax) for ax in fig.axes} == {(round(o["panel_w"], 2), round(o["panel_h"], 2))}, \
+        ([mm(ax) for ax in fig.axes], o["panel_w"], o["panel_h"])
+    W1, H1 = plots.figure(w.exp, draw=False)
+    assert abs(W1 - W0) < 0.1 and abs(H1 - H0) < 0.5, (W0, H0, W1, H1)
+    w.do_undo()
+    assert plots.options(w.exp)["size_of"] == "panel"
+    # the legend on 2 lines, sharing the place of the panel below it (9b.png)
+    keep = json.loads(json.dumps(w.exp.figure))
+    own = f._own_panels()
+    leg = next(p for p in own if p.get("kind") == "legend")
+    own.remove(leg)
+    own.insert(0, leg)
+    for p in own:
+        p.pop("newrow", None)
+    own[1]["newrow"] = True
+    w.exp.figure["options"].update(legend="grid", legend_join="below", legend_rows=2)
+    fig = plots.figure(w.exp)
+    cells = dict(fig.quickflow_cells)
+    (lx0, ly0, lx1, ly1), (px0, py0, px1, py1) = cells[0], cells[1]
+    assert ly0 >= py1 - 1e-9 and ly1 - ly0 < py1 - py0, (cells[0], cells[1])
+    assert len({mm(ax) for ax in fig.axes}) == 1, [mm(ax) for ax in fig.axes]
+    n = len(fig.legends[0].get_texts())
+    assert fig.legends[0]._ncols == -(-n // 2), (n, fig.legends[0]._ncols)
+    f.render()
+    assert tuple(f.schema.cell) == fig.quickflow_grid["cell"], (f.schema.cell, "a grid cell")
+    w.exp.figure.clear()
+    w.exp.figure.update(keep)
+    f.refresh()
     f.refresh()
     shot("3_figure_panels")
     f.items.setCurrentRow(0)
@@ -477,6 +517,26 @@ def main(argv) -> int:
     ax = fig.axes[0]
     assert "2 runs" in ax.get_title() and ax.containers, "the pooled bars: mean ± SD"
     own.remove(bars)
+    # the run's day in a title only while another run of it has a panel too
+    hp = next(p for p in own if p.get("group") == pooled)
+    first = next(p for p in own if p.get("group") == "MDA-MB-157 parental cells")
+    assert plots.panel_title(w.exp, hp).endswith("2026-06-11"), plots.panel_title(w.exp, hp)
+    k = own.index(first)
+    own.remove(first)
+    assert plots.panel_title(w.exp, hp) == "MDA-MB-157 parental cells"
+    own.insert(k, first)
+    # labels shown under one name: one series (one style, one legend entry)
+    o = plots.options(w.exp)
+    labs = [lab for lab in w.exp.labels() if any(s.label == lab and s.plot
+                                                  for s in w.exp.samples)][:2]
+    for lab in labs:
+        w.set_alias("label", lab, "one name", remember=False)
+    st = plots.series_style(w.exp, o)
+    assert st[labs[0]] is st[labs[1]]
+    names = plots._legend_entries(w.exp, plots.panels(w.exp), st, o)[1]
+    assert names.count("one name") == 1, names
+    for lab in labs:
+        w.set_alias("label", lab, "", remember=False)
     # the report: each format its own sections; a PowerPoint slide, an Excel by section
     rd = qapp.ReportDialog(w)
     rd.fmt.setCurrentIndex(rd.fmt.findData(".pdf"))
@@ -516,6 +576,16 @@ def main(argv) -> int:
         od.topics.setCurrentRow(2)
         od.grab().save(str(shots / "7_options.png"))
     od.close()
+    ad = qapp.AliasDialog(w)                   # Ctrl+C a name, Ctrl+V as two rows' alias
+    ad.table.setCurrentCell(1, 1)
+    ad._copy()
+    from PySide6.QtWidgets import QTableWidgetSelectionRange
+    ad.table.clearSelection()
+    ad.table.setRangeSelected(QTableWidgetSelectionRange(2, 0, 3, 2), True)
+    ad._paste()
+    want = ad.table.item(1, 1).text()
+    assert [ad.table.item(r, 2).text() for r in (2, 3)] == [want, want]
+    ad.close()
     w.tabs.setCurrentIndex(0)
     w.samples_tab._sort(w.samples_tab.shown().index("label"))
     assert [s.label for s in w.exp.samples] == sorted([s.label for s in w.exp.samples],

@@ -836,7 +836,8 @@ class GatingTab(QWidget):
         one = self.one()
         x, y = self.xy
         o = {**plots.options(exp), "legend": "panel", "layout": "overlay", "title_pt": 9,
-             "label_pt": 8.5, "tick_pt": 7.5, "legend_pt": 7.5, "gate_pt": 7.5, "fill": False,
+             "label_pt": 8.5, "xtick_pt": 7.5, "ytick_pt": 7.5, "legend_pt": 7.5, "gate_pt": 7.5,
+             "fill": False,
              "y": self.ny.currentData() or "count"}
         # the dot plot: the selected polygon's parent on its axes, else the selected
         # population's events with its polygons below
@@ -869,11 +870,10 @@ class GatingTab(QWidget):
         # the histogram: the selected population (a range: its parent, the range editable)
         ch = self.ch.currentData() or exp.marker
         hp = (g.parent or model.ALL) if g is not None and g.kind == "range" else self.pop
-        panel = {"group": self.group, "x": ch, "population": hp}
+        panel = {"group": self.group, "x": ch, "population": hp,
+                 "title": f"{exp.title(self.group)} › {exp.name('population', hp)}"}
         styles = plots.series_style(exp, o)
         plots.hist_axes(self.ax2, exp, panel, {**o, "gates": True}, styles, only=ss)
-        self.ax2.set_title(f"{exp.title(self.group)} › {exp.name('population', hp)}",
-                           fontsize=9)
         if g is not None and g.kind == "range" and g.x == ch:
             top = max((s.fcs.range(ch) for s in ss if ch in s.fcs.data), default=0) or 1e7
             self.editor = RangeEditor(self.hist, self.ax2, shown.lo, shown.hi, (1.0, top),
@@ -953,7 +953,7 @@ class GatingTab(QWidget):
         if self.editor is not None:
             self.editor.disconnect()
         exp = self.win.exp
-        o = {**plots.options(exp), "label_pt": 8.5, "tick_pt": 7.5}
+        o = {**plots.options(exp), "label_pt": 8.5, "xtick_pt": 7.5, "ytick_pt": 7.5}
         plots.dot_axes(self.ax1, exp, self.samples(), x, y, parent, [], o)
         self.help.setText(f"Drawing '{name}' below {parent or model.ALL}: click its corners "
                           "(outside the plot: on its edge), then the first one again, a "

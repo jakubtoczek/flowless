@@ -269,7 +269,8 @@ def build(exp: model.Experiment, sections=None, full_table: bool = False) -> tup
                     fig = Figure(figsize=(2.6 * len(polys), 2.6))
                     for ax, x in zip(fig.subplots(1, len(polys), squeeze=False)[0], polys):
                         plots.dot_axes(ax, exp, exp.in_group(grp), x.x, x.y, x.parent, [x],
-                                       {"label_pt": 7, "tick_pt": 6, "gate_pt": 6.5})
+                                       {"label_pt": 7, "xtick_pt": 6, "ytick_pt": 6,
+                                        "gate_pt": 6.5})
                     fig.tight_layout()
                     images[f"gate{k}.png"] = _png(fig, 150)
                     parts.append(f'<p><img src="gate{k}.png" width="{int(250 * len(polys))}">'

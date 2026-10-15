@@ -70,7 +70,8 @@ OPTIONS = [
        tip="bars: the value written above each bar"),
     _o("title_pt", "titles", "Text", "float", 9.0, lo=4, hi=40, step=0.5, suffix=" pt"),
     _o("label_pt", "axis labels", "Text", "float", 8.0, lo=4, hi=40, step=0.5, suffix=" pt"),
-    _o("tick_pt", "tick labels", "Text", "float", 7.0, lo=4, hi=40, step=0.5, suffix=" pt"),
+    _o("xtick_pt", "x tick labels", "Text", "float", 7.0, lo=4, hi=40, step=0.5, suffix=" pt"),
+    _o("ytick_pt", "y tick labels", "Text", "float", 7.0, lo=4, hi=40, step=0.5, suffix=" pt"),
     _o("gate_pt", "range labels", "Text", "float", 7.0, lo=4, hi=40, step=0.5, suffix=" pt"),
     _o("legend_pt", "legend", "Text", "float", 7.5, lo=4, hi=40, step=0.5, suffix=" pt",
        scope="fig"),
@@ -78,6 +79,11 @@ OPTIONS = [
        shown=False, tip='e.g. " (neg. ctrl)" - or give the label an alias (▤)'),
     _o("x_lo", "x from 10^", "Axes", "int", 0, lo=0, hi=9, shown=False),
     _o("x_hi", "x up to 10^ (0: the scale's top)", "Axes", "int", 0, lo=0, hi=9, shown=False),
+    _o("size_of", "the size is the", "Layout", "choice", "panel", scope="fig", bar=True,
+       choices=[("panel", "panel"), ("plot", "plot")],
+       tip="panel: its place in the grid, the title, ranges and axis labels inside it; "
+           "plot: the axes alone, the margins added around. Every plot the same size "
+           "either way"),
     _o("panel_w", "panel width", "Layout", "float", 60.0, lo=20, hi=400, step=5, suffix=" mm",
        scope="fig", bar=True),
     _o("panel_h", "panel height", "Layout", "float", 50.0, lo=20, hi=400, step=5,
@@ -91,8 +97,16 @@ OPTIONS = [
        choices=[("below the figure", "bottom"), ("above the figure", "top"),
                 ("right of the figure", "right"), ("in the grid, at its place", "grid"),
                 ("in each panel", "panel"), ("none", "none")]),
+    _o("legend_join", "in the grid, with", "Legend", "choice", "", scope="fig",
+       choices=[("its own place", ""), ("the panel above", "above"),
+                ("the panel below", "below"), ("the panel on the left", "left"),
+                ("the panel on the right", "right")],
+       tip="the legend and that panel share their two places: the plot keeps its size, "
+           "centred in the room the legend leaves on its side"),
     _o("legend_cols", "columns (0: as many as fit)", "Legend", "int", 0, lo=0, hi=12,
        scope="fig"),
+    _o("legend_rows", "lines (0: as the columns give)", "Legend", "int", 0, lo=0, hi=12,
+       scope="fig", tip="the entries on this many lines: sets the columns"),
     _o("legend_h", "across", "Legend", "choice", "left", scope="fig",
        choices=[("left", "left"), ("centred", "center"), ("right", "right")],
        tip="in its place: a grid cell, the band above / below, the column on the right"),
@@ -111,24 +125,23 @@ OPTIONS = [
 ]
 SPEC = {o["key"]: o for o in OPTIONS}
 DEFAULTS = {o["key"]: o["default"] for o in OPTIONS}
-LEGEND_KEYS = ["legend", "legend_pt", "legend_cols", "legend_h", "legend_v", "legend_dx",
-               "legend_dy", "legend_space"]
+LEGEND_KEYS = ["legend", "legend_pt", "legend_join", "legend_cols", "legend_rows", "legend_h",
+               "legend_v", "legend_dx", "legend_dy", "legend_space"]
 PRESETS = {
     "colour": dict(bw=False, layout="overlay", fill=True, fill_alpha=0.30, lw=1.1, axis_lw=0.6,
-                   title_pt=9.0, label_pt=8.0, tick_pt=7.0, gate_pt=7.0, legend_pt=7.5,
-                   panel_w=60.0, panel_h=50.0, max_w=180.0),
+                   title_pt=9.0, label_pt=8.0, xtick_pt=7.0, ytick_pt=7.0, gate_pt=7.0,
+                   legend_pt=7.5, panel_w=60.0, panel_h=50.0, max_w=180.0),
     "black & white": dict(bw=True, layout="overlay", fill=True, lw=1.0, axis_lw=0.6,
-                          title_pt=9.0,
-                          label_pt=8.0, tick_pt=7.0, gate_pt=7.0, legend_pt=7.5,
-                          panel_w=60.0, panel_h=50.0, max_w=180.0),
+                          title_pt=9.0, label_pt=8.0, xtick_pt=7.0, ytick_pt=7.0, gate_pt=7.0,
+                          legend_pt=7.5, panel_w=60.0, panel_h=50.0, max_w=180.0),
     "black & white, offset": dict(bw=True, layout="offset", fill=True, lw=1.0,
                                   panel_w=60.0, panel_h=60.0, max_w=180.0),
-    "one column (85 mm)": dict(title_pt=7.5, label_pt=7.0, tick_pt=6.0, gate_pt=6.0,
-                               legend_pt=6.5, lw=0.9, axis_lw=0.5, panel_w=42.0, panel_h=36.0,
-                               max_w=85.0),
-    "large (slides)": dict(title_pt=16.0, label_pt=14.0, tick_pt=12.0, gate_pt=12.0,
-                           legend_pt=13.0, lw=2.0, axis_lw=1.2, panel_w=110.0, panel_h=85.0,
-                           max_w=330.0),
+    "one column (85 mm)": dict(title_pt=7.5, label_pt=7.0, xtick_pt=6.0, ytick_pt=6.0,
+                               gate_pt=6.0, legend_pt=6.5, lw=0.9, axis_lw=0.5, panel_w=42.0,
+                               panel_h=36.0, max_w=85.0),
+    "large (slides)": dict(title_pt=16.0, label_pt=14.0, xtick_pt=12.0, ytick_pt=12.0,
+                           gate_pt=12.0, legend_pt=13.0, lw=2.0, axis_lw=1.2, panel_w=110.0,
+                           panel_h=85.0, max_w=330.0),
 }
 
 
@@ -145,9 +158,21 @@ def merged(o: dict, panel: dict) -> dict:
                     if k in SPEC and SPEC[k]["scope"] == "both"}}
 
 
+def split_ticks(d: dict) -> dict:
+    """One tick size (before x and y had their own): both. Changes *d* in place."""
+    if "tick_pt" in d:
+        v = d.pop("tick_pt")
+        d.setdefault("xtick_pt", v)
+        d.setdefault("ytick_pt", v)
+    return d
+
+
 def migrate(fig: dict) -> dict:
-    """A figure saved by the first version (one flat dict of settings): as options +
-    panels. Changes *fig* in place."""
+    """A figure saved by an earlier version: the first's one flat dict of settings as
+    options + panels, one tick size as x and y. Changes *fig* in place."""
+    split_ticks(fig.get("options", {}))
+    for p in fig.get("panels") or []:
+        split_ticks(p.get("opts", {}))
     if "style" not in fig and "width_mm" not in fig:
         return fig
     old = {k: fig.pop(k) for k in list(fig) if k not in ("options", "panels", "series")}
@@ -158,7 +183,8 @@ def migrate(fig: dict) -> dict:
              legend={"shared": "bottom", "panel": "panel"}.get(old.get("legend"), "none"),
              cols=int(old.get("cols") or 0))
     if old.get("font_pt"):
-        o.update(label_pt=old["font_pt"], tick_pt=old["font_pt"] - 1,
+        o.update(label_pt=old["font_pt"], xtick_pt=old["font_pt"] - 1,
+                 ytick_pt=old["font_pt"] - 1,
                  title_pt=old["font_pt"] + 1, legend_pt=old["font_pt"] - 0.5)
     if old.get("groups"):
         fig["panels"] = [new_panel(g) for g in old["groups"]] + [{"kind": "legend"}]
@@ -210,12 +236,18 @@ def grid_places(items: list[dict], per_row: int) -> list[tuple[int, int]]:
 
 def series_style(exp, o: dict) -> dict[str, dict]:
     """label -> {edge, fill, dash, ctrl}: the negative control grey, the others by slot,
-    then what the figure's series settings change."""
+    then what the figure's series settings change. Labels shown under one name (▤) are one
+    series: the first one's style (and settings) for all."""
     bw = o["bw"]
     custom = migrate(exp.figure).get("series", {})
-    out, k = {}, 0
+    out, k, first = {}, 0, {}
     names = list(DASHES)
     for lab in exp.labels():
+        n = exp.name("label", lab)
+        if n in first:
+            out[lab] = out[first[n]]
+            continue
+        first[n] = lab
         roles = {s.role for s in exp.samples if s.label == lab}
         c = custom.get(lab, {})
         if "negative control" in roles:
@@ -255,25 +287,30 @@ def panel_samples(exp, panel: dict) -> list:
 
 
 def panel_title(exp, p: dict) -> str:
-    """A panel's title: its own, else its group's name (and run); a bars panel of runs
+    """A panel's title: its own, else its group's name, its run's day only when another
+    run of it (a group shown under the same name) has a panel too; a bars panel of runs
     pooled: '… · n runs'."""
     if p.get("title"):
         return p["title"]
     g = p.get("group", "")
-    n = len(exp.pool(g))
-    if p.get("kind") == "bars" and n > 1:
-        return f"{exp.name('group', g)} · {n} runs"
-    return exp.title(g)
+    pool = exp.pool(g)
+    if p.get("kind") == "bars" and len(pool) > 1:
+        return f"{exp.name('group', g)} · {len(pool)} runs"
+    if len(pool) > 1 and {q.get("group") for q in panels(exp)} & (set(pool) - {g}):
+        return exp.title(g)
+    return exp.name("group", g)
 
 
 def hist_axes(ax, exp, panel: dict, o: dict, styles: dict, only=None) -> None:
     """Histograms of the panel's group (its samples, or *only*) on the panel's channel
-    (the marker), its population (the main one); the range gates below it drawn."""
+    (the marker), its population (the main one); the range gates below it drawn above the
+    axes (the figure leaves room: range_space)."""
     group = panel.get("group", "")
     ch = panel.get("x") or exp.marker
     pop = panel.get("population") or exp.main_population(group)
     curves, top = [], 0.0
-    for s in (only if only is not None else panel_samples(exp, panel)):
+    ss = only if only is not None else panel_samples(exp, panel)
+    for s in ss:
         if ch not in s.fcs.data:
             continue
         m = exp.masks(s).get(pop)
@@ -307,40 +344,49 @@ def hist_axes(ax, exp, panel: dict, o: dict, styles: dict, only=None) -> None:
                 solid_capstyle="round", label=legend_name(exp, s.label, o))
         if step:
             ax.text(10 ** (o["x_lo"] + 0.15), base + 0.08 * peak, exp.name("label", s.label),
-                    fontsize=o["tick_pt"], color=INK, va="bottom", ha="left", zorder=20)
-    x0 = 10 ** o["x_lo"] if o["x_lo"] else 1
-    x1 = 10 ** o["x_hi"] if o["x_hi"] else (top or 1e7)
+                    fontsize=o["ytick_pt"], color=INK, va="bottom", ha="left", zorder=20)
+    x0, x1 = _span(exp, ch, ss, o)
     ax.set_xscale("log")
     ax.set_xlim(x0, x1)
-    data_top = (len(order) - 1) * step + peak * 1.04
-    ranges = model_ranges(exp, group, pop, ch,
-                          only[0] if only is not None and len(only) == 1 else None)
-    ymax = data_top
-    if o["gates"] and ranges:
-        ymax = _ranges(ax, exp, ranges, o, data_top, x0, x1)
-    ax.set_ylim(0, ymax)
+    ax.set_ylim(0, (len(order) - 1) * step + peak * 1.04)
+    above = 0.0
+    if o["gates"]:
+        above = _ranges(ax, exp, model_ranges(
+            exp, group, pop, ch, only[0] if only is not None and len(only) == 1 else None),
+            o, x0, x1)
     w_pt = ax.get_position().width * ax.figure.get_figwidth() * 72
     ax.xaxis.set_major_locator(LogLocator(base=10, numticks=max(3, min(12, int(
-        w_pt / (o["tick_pt"] * 2.3)) + 1))))         # '10⁶' takes about 2 em
+        w_pt / (o["xtick_pt"] * 2.3)) + 1))))         # '10⁶' takes about 2 em
     ax.xaxis.set_minor_locator(LogLocator(base=10, subs=np.arange(2, 10), numticks=12))
     ax.xaxis.set_minor_formatter(NullFormatter())
     if o["y"] == "mode" and not step:
         ax.set_yticks([0, 25, 50, 75, 100])
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
-    ax.spines["left"].set_bounds(0, data_top if step else min(ymax, peak * 1.04))
     if step:
         ax.set_yticks([])
         ax.spines["left"].set_visible(False)
-    ax.tick_params(labelsize=o["tick_pt"])
+    _tick_sizes(ax, o)
     ax.set_xlabel(exp.name("channel", ch), fontsize=o["label_pt"])
     ax.set_ylabel(Y_LABEL.get(o["y"], "Count") + (" (offset)" if step else ""),
                   fontsize=o["label_pt"])
-    _title(ax, title, o)
+    _title(ax, title, o, above)
     _axis_lines(ax, o)
     if o["legend"] == "panel":
         ax.legend(frameon=False, loc="upper left", fontsize=o["legend_pt"],
                   handlelength=2.2, borderaxespad=0.2, labelspacing=o["legend_space"])
+
+
+def _span(exp, ch, ss, o) -> tuple[float, float]:
+    """A histogram's x range: 10^x_lo (else 1) to 10^x_hi (else the files' top)."""
+    top = max((s.fcs.range(ch) or s.fcs.data[ch].max() for s in ss if ch in s.fcs.data),
+              default=0)
+    return (10 ** o["x_lo"] if o["x_lo"] else 1), (10 ** o["x_hi"] if o["x_hi"] else top or 1e7)
+
+
+def _tick_sizes(ax, o: dict) -> None:
+    ax.tick_params(axis="x", labelsize=o["xtick_pt"])
+    ax.tick_params(axis="y", labelsize=o["ytick_pt"])
 
 
 def _axis_lines(ax, o: dict) -> None:
@@ -368,14 +414,15 @@ def wrap(title: str, width_pt: float, pt: float) -> str:
 
 def _room(ax, o: dict) -> float:
     """pt a title may take: the axes' width and a little of the margins."""
-    return ax.get_position().width * ax.figure.get_figwidth() * 72 + o["tick_pt"] * 2
+    return ax.get_position().width * ax.figure.get_figwidth() * 72 + o["ytick_pt"] * 2
 
 
-def _title(ax, title: str, o: dict) -> None:
+def _title(ax, title: str, o: dict, above: float = 0.0) -> None:
     """The panel's title at its size, on more lines when wider than the panel (the
-    figure leaves room for them: _margins)."""
+    figure leaves room for them: _margins), over *above* pt of range labels or the
+    figure's "_above" (every title of a figure at one height)."""
     ax.set_title(wrap(title, _room(ax, o), o["title_pt"]), fontsize=o["title_pt"], color=INK,
-                 pad=3, linespacing=1.1)
+                 pad=3 + max(above, o.get("_above", 0.0)), linespacing=1.1)
 
 
 def model_ranges(exp, group, pop, ch, sample=None) -> list:
@@ -385,12 +432,54 @@ def model_ranges(exp, group, pop, ch, sample=None) -> list:
     return [g for g in tree if g.kind == "range" and g.x == ch and g.name in below]
 
 
-def _ranges(ax, exp, gates, o, data_top, x0, x1) -> float:
-    """Each range as a bracket above the curves, its name over it; ranges that overlap
-    take the next row up. Returns the axes' new top."""
+def _band(o: dict) -> float:
+    """pt a row of range brackets and labels takes."""
+    return o["gate_pt"] * 1.35 + 5
+
+
+def range_space(exp, p: dict, o: dict, w_pt: float) -> float:
+    """pt the histogram panel *p*'s range gates take above its axes, *w_pt* wide."""
+    if p.get("kind", "histogram") != "histogram" or not o["gates"]:
+        return 0.0
+    g = p.get("group", "")
+    ch = p.get("x") or exp.marker
+    ranges = model_ranges(exp, g, p.get("population") or exp.main_population(g), ch)
+    if not ranges:
+        return 0.0
+    return _place(exp, ranges, o, *_span(exp, ch, panel_samples(exp, p), o), w_pt)[1] * _band(o)
+
+
+def _ranges(ax, exp, gates, o, x0, x1) -> float:
+    """Each range as a bracket above the axes, its name over it; ranges that overlap take
+    the next row up. Returns the pt they take."""
     fig = ax.figure
+    placed, n = _place(exp, gates, o, x0, x1, ax.get_position().width * fig.get_figwidth() * 72)
+    if not placed:
+        return 0.0
+    h_pt = max(ax.get_position().height * fig.get_figheight() * 72, 30)
+    tr = ax.get_xaxis_transform()                 # x: data, y: in axes heights
+    t = (0.2 * o["gate_pt"] + 1) / h_pt           # a bracket's end, half
+    kw = dict(color=INK, lw=o["axis_lw"] * 1.3, zorder=30, clip_on=False, transform=tr)
+    for g, lo, hi, r, cx, name in placed:
+        y = 1 + (2 + r * _band(o)) / h_pt + t     # row 0: its ends 2 pt over the axes
+        ax.plot([lo, hi], [y, y], solid_capstyle="butt", **kw)
+        ax.plot([lo, lo], [y - t, y + t], **kw)
+        ax.plot([hi, hi], [y - t, y + t], **kw)
+        ax.text(cx, y + t * 0.6, name, ha="center", va="bottom", fontsize=o["gate_pt"],
+                color=INK, zorder=30, transform=tr)
+        if o["gate_lines"]:
+            for v in (lo, hi):
+                if x0 < v < x1:
+                    ax.plot([v, v], [0, y - t], color=MUTED, lw=0.5, ls=(0, (1.5, 1.5)),
+                            zorder=1, clip_on=False, transform=tr)
+    return n * _band(o)
+
+
+def _place(exp, gates, o, x0, x1, w_pt) -> tuple[list, int]:
+    """([(gate, lo, hi, row, label's centre, name)], rows): a range whose bracket or label
+    would overlap another's takes the next row up."""
     L0, L1 = math.log10(x0), math.log10(x1)
-    dec_per_pt = (L1 - L0) / max(ax.get_position().width * fig.get_figwidth() * 72, 30)
+    dec_per_pt = (L1 - L0) / max(w_pt, 30)
     rows, placed = [], []          # rows: [(bracket, label)] taken, each (from, to) log10 x
     for g in sorted(gates, key=lambda g: g.lo or 0):
         lo, hi = max(g.lo or x0, x0), min(g.hi or x1, x1)
@@ -400,7 +489,6 @@ def _ranges(ax, exp, gates, o, data_top, x0, x1) -> float:
         half = len(name) * o["gate_pt"] * 0.55 / 2 * dec_per_pt
         c = (math.log10(lo) + math.log10(hi)) / 2
         c = min(max(c, L0 + half), L1 - half)                 # the label inside the axes
-        span = (min(math.log10(lo), c - half), max(math.log10(hi), c + half))
         gap = o["gate_pt"] * 0.6 * dec_per_pt
         br, lab = (math.log10(lo), math.log10(hi)), (c - half, c + half)
         tol = 1e-3
@@ -414,27 +502,7 @@ def _ranges(ax, exp, gates, o, data_top, x0, x1) -> float:
             rows.append([])
         rows[r].append((br, lab))
         placed.append((g, lo, hi, r, 10 ** c, name))
-    if not placed:
-        return data_top
-    ax_h_pt = max(ax.get_position().height * fig.get_figheight() * 72, 30)
-    frac = (o["gate_pt"] * 1.35 + 5) / ax_h_pt          # one row, as a fraction of the axes
-    top = data_top / max(0.35, 1 - frac * len(rows))
-    band = frac * top
-    for g, lo, hi, r, cx, name in placed:
-        y = data_top + band * (r + 0.3)
-        tick, lw = band * 0.18, o["axis_lw"] * 1.3
-        ax.plot([lo, hi], [y, y], color=INK, lw=lw, solid_capstyle="butt", zorder=30,
-                clip_on=False)
-        ax.plot([lo, lo], [y - tick, y + tick], color=INK, lw=lw, zorder=30, clip_on=False)
-        ax.plot([hi, hi], [y - tick, y + tick], color=INK, lw=lw, zorder=30, clip_on=False)
-        ax.text(cx, y + tick * 0.6, name, ha="center", va="bottom", fontsize=o["gate_pt"],
-                color=INK, zorder=30)
-        if o["gate_lines"]:
-            for v in (lo, hi):
-                if x0 < v < x1:
-                    ax.plot([v, v], [0, y - tick], color=MUTED, lw=0.5, ls=(0, (1.5, 1.5)),
-                            zorder=1)
-    return top
+    return placed, len(rows)
 
 
 _SUP = str.maketrans("0123456789-", "⁰¹²³⁴⁵⁶⁷⁸⁹⁻")
@@ -481,7 +549,7 @@ def dot_axes(ax, exp, samples: list, x: str, y: str, parent: str = "", gates=Non
     sx, sy = _linear_ticks(ax.xaxis, rx), _linear_ticks(ax.yaxis, ry)
     ax.set_xlabel(exp.name("channel", x) + sx, fontsize=o["label_pt"])
     ax.set_ylabel(exp.name("channel", y) + sy, fontsize=o["label_pt"])
-    ax.tick_params(labelsize=o["tick_pt"])
+    _tick_sizes(ax, o)
     _axis_lines(ax, o)
     if title:
         _title(ax, title, o)
@@ -532,7 +600,8 @@ def bars_axes(ax, exp, panel: dict, o: dict, styles: dict) -> None:
     if len(pool) > 1:
         for k, s in enumerate(ss):
             for g in pool:
-                t = next((x for x in exp.in_group(g) if x.label == s.label and x.plot), None)
+                t = next((x for x in exp.in_group(g) if x.plot and
+                          exp.name("label", x.label) == exp.name("label", s.label)), None)
                 if g != group and t is not None:
                     runs[k].append(value(t, measured(exp, g)))
     runs = [[v for v in r if v] for r in runs]
@@ -573,7 +642,7 @@ def bars_axes(ax, exp, panel: dict, o: dict, styles: dict) -> None:
     ax.set_xlim(-0.6, len(ss) - 0.4)
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
-    ax.tick_params(labelsize=o["tick_pt"])
+    _tick_sizes(ax, o)
     ax.set_ylabel(f"{exp.stat}, {exp.name('channel', ch)}", fontsize=o["label_pt"])
     _title(ax, title, o)
     _axis_lines(ax, o)
@@ -586,40 +655,61 @@ def model_num(v) -> str:
 # --- the figure -------------------------------------------------------------------------
 
 def _margins(o: dict, kind: str, lines: int = 1) -> tuple[float, float, float, float]:
-    """(left, bottom, right, top) mm around a panel's axes, from its fonts; *lines*: of the
-    titles in its row."""
+    """(left, bottom, right, top) mm around a panel's axes, from its fonts; *lines*: of its
+    title."""
     noy = kind == "histogram" and o["layout"] == "offset"
-    left = (o["label_pt"] * 1.3 + 5 if noy else o["tick_pt"] * 2.4 + o["label_pt"] * 1.3 + 7)
-    bottom = o["tick_pt"] * 1.4 + o["label_pt"] * 1.3 + 6
+    left = (o["label_pt"] * 1.3 + 5 if noy else o["ytick_pt"] * 2.4 + o["label_pt"] * 1.3 + 7)
+    bottom = o["xtick_pt"] * 1.4 + o["label_pt"] * 1.3 + 6
     if kind == "bars":
-        bottom += o["tick_pt"] * 2.2
+        bottom += o["xtick_pt"] * 2.2
     top = o["title_pt"] * (1.45 + 1.1 * (lines - 1)) + 3
-    right = o["tick_pt"] * 1.3 + 2
+    right = o["xtick_pt"] * 1.3 + 2
     return left * PT, bottom * PT, right * PT, top * PT
 
 
+def margins(exp, o: dict) -> tuple[float, float, float, float, float]:
+    """(left, bottom, right, top) mm around every plot, the widest any panel needs (titles,
+    range labels, tick labels): every plot the same size; and the pt the range labels take
+    over the plots. The size set (*o*: size_of) is the panel's (margins inside) or the
+    plot's (margins around)."""
+    # ponytail: one set for the whole figure, per row if the spare margin ever matters
+    gp = [(p, merged(o, p)) for p in panels(exp) if p.get("kind") != "legend"]
+    m = [_margins(po, p.get("kind", "histogram")) for p, po in gp] or [_margins(o, "")]
+    L, B, R = (max(x[k] for x in m) for k in (0, 1, 2))
+    aw = o["panel_w"] if o["size_of"] == "plot" else max(o["panel_w"] - L - R, 5.0)
+    lines = max([wrap(panel_title(exp, p), aw / PT + po["ytick_pt"] * 2,
+                      po["title_pt"]).count("\n") + 1 for p, po in gp] or [1])
+    above = max([range_space(exp, p, po, aw / PT) for p, po in gp] or [0.0])
+    T = max([_margins(po, p.get("kind", "histogram"), lines)[3] for p, po in gp] or [0.0])
+    return L, B, R, T + above * PT, above
+
+
 def _legend_entries(exp, items, styles, o):
+    """(handles, names): one entry per name shown (labels under one name: one series)."""
     shown = set()
     for p in items:
         if p.get("kind") in ("histogram", "bars"):
             shown |= {s.label for s in panel_samples(exp, p)}
-    labs = [lab for lab in styles if lab in shown]
-    return [_handle(styles[lab], o) for lab in labs], [legend_name(exp, lab, o) for lab in labs]
+    out = {}
+    for lab in styles:
+        if lab in shown:
+            out.setdefault(legend_name(exp, lab, o), styles[lab])
+    return [_handle(st, o) for st in out.values()], list(out)
 
 
 def _legend_size(names, o, width_mm: float | None):
-    """(columns, width mm, height mm) of a legend of *names*."""
+    """(columns, width mm, height mm) of a legend of *names*: on the lines set, else in the
+    columns set, else as many as fit in *width_mm* (None: one)."""
     em = o["legend_pt"] * PT
     entry = (2.6 + 1.6) * em + max((len(n) for n in names), default=0) * 0.55 * em
     line = o["legend_pt"] * (1.0 + o["legend_space"]) * PT
     dx = o["legend_dx"] if o["legend_h"] != "center" else 0.0
     dy = abs(o["legend_dy"])
-    if width_mm is None:
-        return 1, entry + 2 + dx, len(names) * line + 2
-    cols = o["legend_cols"] or max(1, int((width_mm - dx) // entry))
-    cols = max(1, min(cols, len(names)))
-    rows = math.ceil(len(names) / cols)
-    return cols, cols * entry, rows * line + 3 + dy
+    n = max(len(names), 1)
+    cols = (math.ceil(n / o["legend_rows"]) if o["legend_rows"] else o["legend_cols"] or
+            (max(1, int((width_mm - dx) // entry)) if width_mm else 1))
+    cols = max(1, min(cols, n))
+    return cols, cols * entry + 2 + dx, math.ceil(n / cols) * line + 3 + dy
 
 
 def _put_legend(fig, handles, names, rect, o, W, H, ncol=1):
@@ -650,16 +740,21 @@ def figure(exp, fig: Figure | None = None, draw: bool = True, style: dict | None
     grid = [(i, p) for i, p in enumerate(items) if p.get("kind") != "legend" or place == "grid"]
     handles, names = _legend_entries(exp, items, styles, o)
     pw, ph = o["panel_w"], o["panel_h"]
-    leg_w = _legend_size(names, o, None)[1] if place == "right" and names else 0.0
-    fit = max(1, int((o["max_w"] - leg_w + 0.01) // pw))
+    L, B, R, T, above = margins(exp, o)
+    plot = o["size_of"] == "plot"
+    cw, aw = (pw + L + R, pw) if plot else (pw, max(pw - L - R, 5.0))
+    ch, ah = (ph + T + B, ph) if plot else (ph, max(ph - T - B, 5.0))
+    gcols, leg_w, _ = _legend_size(names, o, None)
+    leg_w = leg_w if place == "right" and names else 0.0
+    fit = max(1, int((o["max_w"] - leg_w + 0.05) // cw))     # a switch's rounding: same fit
     per_row = min(o["cols"] or fit, fit)
     places = grid_places([p for _, p in grid], per_row)
     cols = max([c + 1 for _, c in places] or [1])
     rows = max([r + 1 for r, _ in places] or [1])
-    W = cols * pw + leg_w
+    W = cols * cw + leg_w
     lcols, _, leg_h = _legend_size(names, o, W) if place in ("top", "bottom") and names \
         else (1, 0, 0.0)
-    H = rows * ph + leg_h
+    H = rows * ch + leg_h
     if not draw:
         return W, H
     with mpl.rc_context(_rc()):
@@ -672,32 +767,26 @@ def figure(exp, fig: Figure | None = None, draw: bool = True, style: dict | None
         fig.patch.set_facecolor("none" if clear else "white")
         fig.quickflow_cells = []
         fig.quickflow_grid = {"places": {i: rc for (i, _), rc in zip(grid, places)},
-                              "rows": rows, "cols": cols, "per_row": per_row}
+                              "rows": rows, "cols": cols, "per_row": per_row,
+                              "cell": (cw, ch),
+                              "origin": (0.0, leg_h if place == "top" else 0.0)}
         if not grid and not names:
             fig.text(0.5, 0.5, "Nothing to plot yet: add FCS files (or a panel with +)",
                      ha="center", va="center", color=MUTED, fontsize=8)
             return fig
         y_top = H - (leg_h if place == "top" else 0)
-        lines = {}                                  # per row: its titles' most lines
-        for (i, p), (r, c) in zip(grid, places):
-            if p.get("kind") != "legend":
-                po = merged(o, p)
-                ml, _, mr, _ = _margins(po, p.get("kind", "histogram"))
-                t = wrap(panel_title(exp, p), (pw - ml - mr) / PT + po["tick_pt"] * 2,
-                         po["title_pt"])
-                lines[r] = max(lines.get(r, 1), t.count("\n") + 1)
-        for (i, p), (r, c) in zip(grid, places):
-            x0, y1 = c * pw, y_top - r * ph
-            fig.quickflow_cells.append((i, (x0 / W, (y1 - ph) / H, (x0 + pw) / W, y1 / H)))
+        cell = {i: (c * cw, y_top - (r + 1) * ch, (c + 1) * cw, y_top - r * ch)
+                for (i, _), (r, c) in zip(grid, places)}   # mm: x0, y0, x1, y1 (bottom up)
+        gcols = _join(cell, grid, places, names, o) or gcols
+        for i, p in grid:
+            x0, y0, x1, y1 = cell[i]
+            fig.quickflow_cells.append((i, (x0 / W, y0 / H, x1 / W, y1 / H)))
             if p.get("kind") == "legend":
                 if handles:
-                    _put_legend(fig, handles, names, (x0, y1 - ph, x0 + pw, y1), o, W, H,
-                                o["legend_cols"] or 1)
+                    _put_legend(fig, handles, names, cell[i], o, W, H, gcols)
                 continue
-            po = merged(o, p)
-            ml, mb, mr, mt = _margins(po, p.get("kind", "histogram"), lines.get(r, 1))
-            ax = fig.add_axes([(x0 + ml) / W, (y1 - ph + mb) / H, (pw - ml - mr) / W,
-                               (ph - mb - mt) / H])
+            po = {**merged(o, p), "_above": above}          # every title at one height
+            ax = fig.add_axes([(x0 + L) / W, (y0 + B) / H, aw / W, ah / H])
             if clear:
                 ax.patch.set_alpha(0)
             kind = p.get("kind", "histogram")
@@ -716,13 +805,48 @@ def figure(exp, fig: Figure | None = None, draw: bool = True, style: dict | None
             li = next(i for i, p in enumerate(items) if p.get("kind") == "legend")
             if place == "right":
                 mm = (W - leg_w, 0, W, H)
-                _put_legend(fig, handles, names, mm, o, W, H, 1)
+                _put_legend(fig, handles, names, mm, o, W, H, gcols)
             else:
                 b = 0 if place == "bottom" else H - leg_h
                 mm = (0, b, W, b + leg_h)
                 _put_legend(fig, handles, names, mm, o, W, H, lcols)
             fig.quickflow_cells.append((li, (mm[0] / W, mm[1] / H, mm[2] / W, mm[3] / H)))
     return fig
+
+
+def _join(cell, grid, places, names, o) -> int:
+    """The legend in the grid sharing a neighbour panel's place (legend_join): the two
+    cells one area, the legend on its side of it at its size, the panel's cell centred in
+    the rest (the plot keeps its size). Changes *cell* in place; returns the legend's
+    columns (above / below a panel: as many as fit), 0 if not joined."""
+    d = {"above": (-1, 0), "below": (1, 0), "left": (0, -1), "right": (0, 1)}.get(
+        o["legend_join"])
+    at = {rc: i for (i, _), rc in zip(grid, places)}
+    li = next((i for i, p in grid if p.get("kind") == "legend"), None)
+    if d is None or li is None:
+        return 0
+    r, c = next(rc for (i, _), rc in zip(grid, places) if i == li)
+    pi = at.get((r + d[0], c + d[1]))
+    if pi is None:
+        return 0
+    (lx0, ly0, lx1, ly1), (px0, py0, px1, py1) = cell[li], cell[pi]
+    x0, y0, x1, y1 = min(lx0, px0), min(ly0, py0), max(lx1, px1), max(ly1, py1)
+    cols, lw, lh = _legend_size(names, o, px1 - px0 if d[0] else None)
+    if d[0]:                                       # one above the other
+        lh = min(lh, (y1 - y0) - (py1 - py0))      # the plot keeps its size
+        top = ly1 > py1                            # the legend's side: where it was
+        cell[li] = (x0, y1 - lh, x1, y1) if top else (x0, y0, x1, y0 + lh)
+        b = (y0 + (y1 - lh - y0 - (py1 - py0)) / 2) if top else \
+            (y0 + lh + (y1 - y0 - lh - (py1 - py0)) / 2)
+        cell[pi] = (px0, b, px1, b + py1 - py0)
+    else:                                          # side by side
+        lw = min(lw, (x1 - x0) - (px1 - px0))
+        left = lx0 < px0
+        cell[li] = (x0, y0, x0 + lw, y1) if left else (x1 - lw, y0, x1, y1)
+        a = (x0 + lw + (x1 - x0 - lw - (px1 - px0)) / 2) if left else \
+            (x0 + (x1 - lw - x0 - (px1 - px0)) / 2)
+        cell[pi] = (a, py0, a + px1 - px0, py1)
+    return cols
 
 
 def _handle(sty, o):
