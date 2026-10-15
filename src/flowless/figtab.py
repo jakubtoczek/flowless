@@ -45,13 +45,15 @@ class Num(QDoubleSpinBox):
 class Schematic(QWidget):
     """The figure's layout as boxes, in its proportions (from the render, so they can't
     disagree with it). Click a box to select it (elsewhere: the whole figure), right-click
-    for its menu, + adds a panel. Drag a box anywhere on a grid of half panels: its outline
-    shows where it lands (red: over another box, not taken); nothing else moves. The legend
-    also goes above, below or right of the figure."""
+    for its menu, + adds a panel. Drag a box anywhere on a grid of quarter panels: its
+    outline shows where it lands (red: over another box, not taken); nothing else moves. The
+    legend also goes above, below or right of the figure; in the grid, its corner handle
+    sizes it."""
 
     picked = Signal(int)                 # an index in panels(); -1: the figure
-    placed = Signal(int, int, int, str)  # item, x, y (half cells), the legend's place ('': as
+    placed = Signal(int, int, int, str)  # item, x, y (quarters), the legend's place ('': as
     #                                      it was; a place outside the grid: x, y unused)
+    sized = Signal(int, int, int)        # the legend, its width, height (quarters)
     add = Signal()
     menu = Signal(int, object)           # item, global position
     M = 26                               # px around the figure: the legend's drop zones
@@ -62,7 +64,7 @@ class Schematic(QWidget):
         self.cell, self.origin, self.size_mm = (60.0, 50.0), (0, 0), (1.0, 1.0)
         self.top, self.next, self.leg_size, self.max_w = 0.0, (0, 0), (2, 2), 0.0
         self.legend_i, self.place, self.sel = None, "bottom", -1
-        self.press = self.drag = None
+        self.press = self.drag = self.sizing = None
         self.setMinimumSize(180, 160)
         self.setFocusPolicy(Qt.StrongFocus)
 
@@ -79,14 +81,14 @@ class Schematic(QWidget):
         self.texts, self.legend_i, self.place, self.sel = texts, legend_i, place, sel
         self.update()
 
-    # -- geometry: half cells to mm (the figure's, top-down) to px
-    def _half(self, x, y, w, h) -> tuple[float, float, float, float]:
-        hw, hh = self.cell[0] / 2, self.cell[1] / 2
-        return (x - self.origin[0]) * hw, self.top + (y - self.origin[1]) * hh, w * hw, h * hh
+    # -- geometry: quarters to mm (the figure's, top-down) to px
+    def _q(self, x, y, w, h) -> tuple[float, float, float, float]:
+        qw, qh = self.cell[0] / plots.Q, self.cell[1] / plots.Q
+        return (x - self.origin[0]) * qw, self.top + (y - self.origin[1]) * qh, w * qw, h * qh
 
     def _ghost(self) -> tuple[float, float, float, float]:
         """The '+' box: where the next panel goes."""
-        return self._half(*self.next, 2, 2)
+        return self._q(*self.next, plots.Q, plots.Q)
 
     def _area(self) -> tuple[float, float, float, float]:
         """mm shown: the figure, half a panel of room left and above, a panel right and
@@ -138,8 +140,18 @@ class Schematic(QWidget):
                 "bottom": QRectF(a.left(), a.bottom() + 3, a.width(), m - 3),
                 "right": QRectF(a.right() + 3, a.top(), m - 3, a.height())}
 
+    def _handle(self) -> QRectF | None:
+        """The legend's corner handle (bottom right), when it is in the grid."""
+        b = self._boxes().get(self.legend_i)
+        if b is None or self.legend_i not in self.at:
+            return None
+        return QRectF(b.right() - 9, b.bottom() - 9, 10, 10)
+
     def _at(self, pos):
-        """The item under *pos*, 'add' on the '+', None."""
+        """The item under *pos*, 'add' on the '+', 'size' on the legend's handle, None."""
+        h = self._handle()
+        if h is not None and h.adjusted(-3, -3, 3, 3).contains(pos):
+            return "size"
         hit = next((i for i, r in self._boxes().items() if r.contains(pos)), None)
         if hit is None and self._px(*self._ghost()).adjusted(4, 4, -4, -4).contains(pos):
             return "add"
@@ -150,7 +162,7 @@ class Schematic(QWidget):
         return tuple(self.at[i][2:]) if i in self.at else self.leg_size
 
     def _target(self, pos):
-        """('zone', place) | ('grid', x, y, free), for the item dragged: the half cell its
+        """('zone', place) | ('grid', x, y, free), for the item dragged: the quarter its
         top left would take, centred on the pointer; free: over no other box."""
         i = self.drag[0]
         if i == self.legend_i:
@@ -159,8 +171,9 @@ class Schematic(QWidget):
                     return ("zone", place)
         w, h = self._size(i)
         x, y = self._mm(pos)
-        gx = max(round(x / (self.cell[0] / 2) - w / 2), -1) + self.origin[0]
-        gy = max(round((y - self.top) / (self.cell[1] / 2) - h / 2), -1) + self.origin[1]
+        q = plots.Q
+        gx = max(round(x / (self.cell[0] / q) - w / 2), -q // 2) + self.origin[0]
+        gy = max(round((y - self.top) / (self.cell[1] / q) - h / 2), -q // 2) + self.origin[1]
         free = not any(plots._overlap((gx, gy, w, h), r) for j, r in self.at.items() if j != i)
         return ("grid", gx, gy, free)
 
@@ -178,8 +191,19 @@ class Schematic(QWidget):
             p.setPen(QPen(FOCUS, 2, Qt.DashLine))
             return p.drawRect(self._zones()[to[1]])
         p.setPen(QPen(MARK if to[3] else WARN, 2, Qt.DashLine))
-        p.drawRoundedRect(self._px(*self._half(to[1], to[2], *self._size(self.drag[0])))
+        p.drawRoundedRect(self._px(*self._q(to[1], to[2], *self._size(self.drag[0])))
                           .adjusted(3, 3, -3, -3), 4, 4)
+
+    def _new_size(self, pos) -> tuple[int, int, bool]:
+        """The legend's size (quarters) with its corner at *pos*, and whether it is free."""
+        x, y, _, _ = self.at[self.legend_i]
+        a = self._q(x, y, 0, 0)
+        mx, my = self._mm(pos)
+        w = max(1, round((mx - a[0]) / (self.cell[0] / plots.Q)))
+        h = max(1, round((my - a[1]) / (self.cell[1] / plots.Q)))
+        free = not any(plots._overlap((x, y, w, h), r) for j, r in self.at.items()
+                       if j != self.legend_i)
+        return w, h, free
 
     # -- drawing
     def paintEvent(self, _):
@@ -206,24 +230,40 @@ class Schematic(QWidget):
             p.drawRoundedRect(r, 4, 4)
             p.setPen(QColor("#e0e0e0"))
             text = self.texts.get(i, "")
-            if leg and p.fontMetrics().horizontalAdvance(text) > r.width() - 8:
-                text = "▤"                       # a narrow legend
+            if leg and (p.fontMetrics().horizontalAdvance(text) > r.width() - 8 or
+                        r.height() < p.fontMetrics().height() + 4):
+                text = "▤"                       # a small legend
             p.drawText(r.adjusted(4, 2, -4, -2), Qt.AlignCenter | Qt.TextWordWrap, text)
         p.setOpacity(1.0)
+        h = self._handle()
+        if h is not None and not self.drag:      # the legend's size handle
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(ACCENT))
+            p.drawPolygon([h.topRight(), h.bottomRight(), h.bottomLeft()])
+        if self.sizing:
+            w, hh, free = self._new_size(self.sizing)
+            x, y, _, _ = self.at[self.legend_i]
+            p.setBrush(Qt.NoBrush)
+            p.setPen(QPen(MARK if free else WARN, 2, Qt.DashLine))
+            p.drawRoundedRect(self._px(*self._q(x, y, w, hh)).adjusted(3, 3, -3, -3), 4, 4)
         if self.size_mm[0] > self.max_w + 0.05:     # too wide: where the width ends
             x = self._px(self.max_w, 0, 0, 0).x()
             p.setPen(QPen(WARN, 1.5, Qt.DashLine))
             f = self._frame()
             p.drawLine(QPointF(x, f.top() - 6), QPointF(x, f.bottom() + 6))
-        if self.drag:                            # the grid of half panels
+        if self.drag or self.sizing:             # the grid: quarters faint, halves dotted
             x0, y0, x1, y1 = self._area()
-            hw, hh = self.cell[0] / 2, self.cell[1] / 2
-            p.setPen(QPen(QColor("#4a4a4a"), 1, Qt.DotLine))
-            for k in range(math.ceil(x0 / hw), math.floor(x1 / hw) + 1):
-                a = self._px(k * hw, y0, 0, y1 - y0)
+            q = plots.Q
+            qw, qh = self.cell[0] / q, self.cell[1] / q
+            for k in range(math.ceil(x0 / qw), math.floor(x1 / qw) + 1):
+                p.setPen(QPen(QColor("#4a4a4a" if k % (q // 2) == 0 else "#363636"), 1,
+                              Qt.DotLine))
+                a = self._px(k * qw, y0, 0, y1 - y0)
                 p.drawLine(a.topLeft(), a.bottomLeft())
-            for k in range(math.ceil((y0 - self.top) / hh), math.floor((y1 - self.top) / hh) + 1):
-                a = self._px(x0, self.top + k * hh, x1 - x0, 0)
+            for k in range(math.ceil((y0 - self.top) / qh), math.floor((y1 - self.top) / qh) + 1):
+                p.setPen(QPen(QColor("#4a4a4a" if k % (q // 2) == 0 else "#363636"), 1,
+                              Qt.DotLine))
+                a = self._px(x0, self.top + k * qh, x1 - x0, 0)
                 p.drawLine(a.topLeft(), a.topRight())
         else:
             g = self._px(*self._ghost()).adjusted(6, 6, -6, -6)
@@ -255,16 +295,29 @@ class Schematic(QWidget):
             return
         if hit == "add":
             return self.add.emit()
+        if hit == "size":
+            self.sizing = e.position()
+            return
         self.press = (hit, e.position()) if hit is not None else None
         if hit is None:
             self.picked.emit(-1)
 
     def mouseMoveEvent(self, e):
+        if self.sizing:
+            self.sizing = e.position()
+            return self.update()
         if self.press and (self.drag or (e.position() - self.press[1]).manhattanLength() > 6):
             self.drag = (self.press[0], e.position())
             self.update()
 
     def mouseReleaseEvent(self, e):
+        if self.sizing:
+            w, h, free = self._new_size(e.position())
+            self.sizing = None
+            self.update()
+            if free:
+                self.sized.emit(self.legend_i, w, h)
+            return
         press, self.press = self.press, None
         if self.drag:
             self.drag = (self.drag[0], e.position())
@@ -277,8 +330,8 @@ class Schematic(QWidget):
             self.picked.emit(press[0])
 
     def keyPressEvent(self, e):
-        if e.key() == Qt.Key_Escape and self.drag:
-            self.press = self.drag = None
+        if e.key() == Qt.Key_Escape and (self.drag or self.sizing):
+            self.press = self.drag = self.sizing = None
             self.update()
             return
         super().keyPressEvent(e)
@@ -395,14 +448,16 @@ class FigureTab(QWidget):
         self.schema = Schematic()
         self.schema.picked.connect(lambda i: self.items.setCurrentRow(i + 1))
         self.schema.placed.connect(self._place)
+        self.schema.sized.connect(self._legend_size)
         self.schema.add.connect(lambda: self.add(end=True))
         self.schema.menu.connect(self._schema_menu)
         self.schema.addAction(QAction(self.schema, shortcut=QKeySequence.Delete,
                                       triggered=self.remove, shortcutContext=Qt.WidgetShortcut))
-        self.schema.setToolTip("Click a box to select it; drag it anywhere on the grid of half "
-                               "panels (the outline: where it lands, red: taken; the legend "
-                               "also above, below or right of the figure); + adds a panel; "
-                               "right-click: its menu; Del removes the selected panel")
+        self.schema.setToolTip("Click a box to select it; drag it anywhere on the grid of "
+                               "quarter panels (the outline: where it lands, red: taken; the "
+                               "legend also above, below or right of the figure); the "
+                               "legend's corner ◢ sizes it; + adds a panel; right-click: its "
+                               "menu; Del removes the selected panel")
         mid = QWidget()
         mv = QVBoxLayout(mid)
         mv.setContentsMargins(0, 0, 0, 0)
@@ -481,16 +536,16 @@ class FigureTab(QWidget):
         self.schema.update()
 
     def _pin(self):
-        """Every item of the grid at the place it is drawn ("at"), so that a move or a new
-        order moves nothing else."""
+        """Every item of the grid at the place it is drawn ("pos", in panels), so that a
+        move or a new order moves nothing else."""
         own = self._own_panels()
         for i, v in getattr(self.fig, "flowless_grid", {}).get("at", {}).items():
-            if i < len(own) and not own[i].get("at"):
-                own[i]["at"] = list(v[:2])
+            if i < len(own) and not own[i].get("pos"):
+                own[i]["pos"] = [v[0] / plots.Q, v[1] / plots.Q]
 
     def _place(self, i, x, y, place):
-        """A box dropped: item *i* at (x, y) half cells, the others where they are; the
-        legend out of the grid to *place*."""
+        """A box dropped: item *i* at (x, y) quarters, its own shift back to none, the
+        others where they are; the legend out of the grid to *place*."""
         self.win.snap()                                   # each drop its own undo
         self._snap_key = (None, 0.0)
         opts = self.fig_dict().setdefault("options", {})
@@ -499,13 +554,29 @@ class FigureTab(QWidget):
         else:
             self._pin()
             own = self._own_panels()
-            own[i]["at"] = [x, y]
+            own[i]["pos"] = [x / plots.Q, y / plots.Q]
+            own[i].pop("shift", None)
             if place:
                 opts["legend"] = "grid"
-            placed = [q["at"] for q in own if q.get("at")]
+            placed = [q["pos"] for q in own if q.get("pos")]
             dx, dy = min(a[0] for a in placed), min(a[1] for a in placed)
             for a in placed:                       # the grid from (0, 0)
                 a[0], a[1] = a[0] - dx, a[1] - dy
+        self.sel = i
+        self._changed()
+        self.refresh()
+
+    def _legend_size(self, i, w, h):
+        """The legend's place sized by its handle: w × h quarters (None: as its entries
+        need)."""
+        self.win.snap()
+        self._snap_key = (None, 0.0)
+        self._pin()
+        own = self._own_panels()
+        if w is None:
+            own[i].pop("size", None)
+        else:
+            own[i]["size"] = [w / plots.Q, h / plots.Q]
         self.sel = i
         self._changed()
         self.refresh()
@@ -520,6 +591,10 @@ class FigureTab(QWidget):
                 a.setCheckable(True)
                 a.setChecked(v == cur)
                 a.triggered.connect(lambda _=False, v=v: self._set("legend", v, None))
+            if own[i].get("size"):
+                m.addSeparator()
+                m.addAction("Size: as its entries need").triggered.connect(
+                    lambda: self._legend_size(i, None, None))
         else:
             m.addAction("Add a copy").triggered.connect(self.add)
             m.addAction("Remove (Del)").triggered.connect(self.remove)
@@ -693,7 +768,7 @@ class FigureTab(QWidget):
                 panel_h=round(o["panel_h"] + k * (T + B), 2))
         if key == "cols":                                  # in rows again, as listed
             for q in self.fig_dict().get("panels") or []:
-                q.pop("at", None)
+                q.pop("pos", None)
         if p is None or plots.SPEC[key]["scope"] == "fig":
             self.fig_dict().setdefault("options", {})[key] = val
             if key in ("legend", "size_of"):           # size_of: the sizes shown change
@@ -777,7 +852,29 @@ class FigureTab(QWidget):
         title = QLineEdit(p.get("title", ""), placeholderText=exp.title(p.get("group", "")))
         title.editingFinished.connect(lambda: self._panel_set("title", title.text(), rebuild=False))
         f.addRow("title", title)
+        sh = list(p.get("shift") or (0.0, 0.0))
+        row = QHBoxLayout()
+        for k, tip in ((0, "across (mm, right +)"), (1, "down (mm, down +)")):
+            n = Num(suffix=" mm", toolTip=f"this panel's plot moved {tip} inside its place; "
+                                          "back to 0 when the panel is dragged")
+            n.setRange(-100, 100)
+            n.setSingleStep(0.5)
+            n.setValue(sh[k])
+            n.valueChanged.connect(lambda v, k=k: self._shift(k, v))
+            row.addWidget(n)
+        f.addRow("shift", row)
         return box
+
+    def _shift(self, k, v):
+        own = self._own_panels()
+        sh = list(own[self.sel].get("shift") or (0.0, 0.0))
+        sh[k] = float(v)
+        self._snap("panel shift")
+        if any(sh):
+            own[self.sel]["shift"] = sh
+        else:
+            own[self.sel].pop("shift", None)
+        self._changed()
 
     def _panel_set(self, key, val, rebuild=True):
         own = self._own_panels()
@@ -875,7 +972,8 @@ class FigureTab(QWidget):
             new = plots.new_panel(next((g for g in exp.groups() if g not in shown),
                                        exp.groups()[0]))
         new.pop("newrow", None)
-        new.pop("at", None)
+        new.pop("pos", None)
+        new.pop("shift", None)
         self._snap("add")
         at = len(own) if end or self.sel < 0 else self.sel + 1
         own.insert(at, new)

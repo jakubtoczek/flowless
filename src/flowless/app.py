@@ -542,7 +542,13 @@ class ResultsTab(QWidget):
         self.stat.currentTextChanged.connect(self._stat)
         self.chan = QComboBox(toolTip="the channel measured: the marker")
         self.chan.currentIndexChanged.connect(self._marker)
-        self.table = QTableWidget(editTriggers=QAbstractItemView.NoEditTriggers)
+        self.table = QTableWidget(editTriggers=QAbstractItemView.NoEditTriggers,
+                                  selectionBehavior=QAbstractItemView.SelectRows)
+        self.table.verticalHeader().hide()
+        h = self.table.horizontalHeader()
+        h.setSectionsClickable(True)
+        h.sectionClicked.connect(self._sort)
+        self.sort = (None, False)                  # (column title, descending): this view only
         self.note = QLabel(wordWrap=True)
         self.note.setStyleSheet("color: #8d8d8d")
         top = QHBoxLayout()
@@ -582,28 +588,69 @@ class ResultsTab(QWidget):
             self.win.exp.marker = c
             self.win.changed()
 
+    TIPS = {"group": "the group (a panel of the figure); with the run's day when runs share "
+                     "its name",
+            "label": "the series (the stain)", "role": "sample, negative control, …",
+            "population": "the population measured: the one each group's figure shows, and "
+                          "the ranges below it (◆: this sample's own gate)",
+            "events": "events in the population", "count": "events in the population",
+            "% parent": "the population's events, % of its parent's",
+            "÷ control": "the value over the group's negative control's (else secondary only, "
+                         "else unstained), in the same population",
+            "runs": "the runs pooled (groups shown under one name)",
+            "SD": "standard deviation over the runs (n − 1)",
+            "÷ control SD": "standard deviation over the runs (n − 1)",
+            "each run": "the run's day: its value", "CV %": "SD / mean × 100, of the events"}
+
     def rows(self) -> tuple[list[str], list[list]]:
+        """The table's titles and rows, sorted as clicked."""
+        heads, rows = self._rows()
+        col, desc = self.sort
+        if col in heads:
+            k = heads.index(col)
+
+            def key(r):
+                v = r[k]
+                if v is None or v == "" or v == "—":
+                    return (2, 0, "")              # empty: last, either way
+                if isinstance(v, (int, float)):
+                    return (0, v, "")
+                return (1, 0, model._natural(Path(str(v))))
+
+            full = [r for r in rows if key(r)[0] < 2]
+            rows = sorted(full, key=key, reverse=desc) + [r for r in rows if key(r)[0] == 2]
+        return heads, rows
+
+    def _rows(self) -> tuple[list[str], list[list]]:
         from . import report
 
         exp = self.win.exp
         if self.mode.currentIndex() == 0:
-            heads = ["group", "label", "sub-population", "events", "% parent", exp.stat,
+            heads = ["group", "label", "population", "events", "% parent", exp.stat,
                      "÷ control"]
             return heads, [[exp.title(r["group"]), exp.name("label", r["label"]),
-                            exp.name("population", r["sub-population"]) or "—", r["count"],
-                            r["% parent"], r["value"], r["÷ control"]]
+                            r["population"], r["count"], r["% parent"], r["value"], r["÷ control"]]
                            for r in report.summary_rows(exp)]
         if self.mode.currentIndex() == 2:
-            heads = ["group", "label", "sub-population", "runs", f"{exp.stat} mean", "SD",
-                     "÷ control mean", "SD ", "each run"]
-            return heads, [[r["group"], r["label"], r["sub-population"] or "—", r["n"],
+            heads = ["group", "label", "population", "runs", f"{exp.stat} mean", "SD",
+                     "÷ control mean", "÷ control SD", "each run"]
+            return heads, [[r["group"], r["label"], r["population"], r["n"],
                             r["mean"], r["sd"], r["ratio mean"], r["ratio sd"], r["runs"]]
                            for r in report.replicate_rows(exp)]
         heads = ["group", "label", "role", "sample", "population", "count", "% parent",
                  "geometric mean", "median", "mean", "CV %", "÷ control"]
         named = {"label", "sample", "population"}
-        return heads, [[exp.title(r[h]) if h == "group" else exp.name(h, r[h]) if h in named
-                        else r[h] for h in heads] for r in exp.results()]
+        return heads, [[exp.title(r[h]) if h == "group" else
+                        exp.name(h, r[h]) + (" ◆" if h == "population" and r["own gate"] else "")
+                        if h in named else r[h] for h in heads] for r in exp.results()]
+
+    def _sort(self, col):
+        """A click on a column's title: sorted by it; again: the other way; a third time:
+        as computed."""
+        name = self.table.horizontalHeaderItem(col).text().rstrip(" ▲▼")
+        c, desc = self.sort
+        self.sort = (name, False) if c != name else (name, True) if not desc else (None, False)
+        self.refresh()
 
     def refresh(self):
         from . import report
@@ -623,11 +670,17 @@ class ResultsTab(QWidget):
         t = self.table
         t.clear()
         t.setColumnCount(len(heads))
-        t.setHorizontalHeaderLabels(heads)
+        col, desc = self.sort
+        for c, h in enumerate(heads):
+            it = QTableWidgetItem(h + ((" ▼" if desc else " ▲") if h == col else ""))
+            it.setToolTip(self.TIPS.get(h, "") + ("; " if h in self.TIPS else "") +
+                          "click: sort by it (again: the other way, a third time: as computed)")
+            t.setHorizontalHeaderItem(c, it)
         t.setRowCount(len(rows))
         for r, row in enumerate(rows):
             for c, v in enumerate(row):
-                txt = report.num(v, 2 if heads[c] in ("÷ control", "÷ control mean", "SD ") else
+                txt = report.num(v, 2 if heads[c] in ("÷ control", "÷ control mean",
+                                                      "÷ control SD") else
                                  1 if heads[c] in ("% parent", "CV %") else 0) \
                     if isinstance(v, (int, float)) and not isinstance(v, bool) else str(v or "")
                 it = _item(txt, False)
@@ -640,7 +693,7 @@ class ResultsTab(QWidget):
     def copy(self):
         from . import report
 
-        heads, rows = self.rows()
+        heads, rows = self.rows()                  # as shown: sorted, then the selection
         sel = sorted({i.row() for i in self.table.selectedIndexes()}) or range(len(rows))
         rows = [rows[i] for i in sel]
         fmt = [[("" if v is None else f"{v:.6g}" if isinstance(v, float) else str(v))

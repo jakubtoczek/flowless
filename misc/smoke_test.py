@@ -10,6 +10,7 @@ DATA: the example data folder (default ../data/data). --shots: a screenshot per 
 from __future__ import annotations
 
 import json
+import math
 import sys
 import tempfile
 from pathlib import Path
@@ -348,8 +349,10 @@ def main(argv) -> int:
     sc = f.schema
     a.processEvents()
 
-    def at():
-        return {i: tuple(v[:2]) for i, v in f.fig.flowless_grid["at"].items()}
+    Q = plots.Q
+
+    def at():                                  # in halves of a panel, as first written
+        return {i: (v[0] * 2 / Q, v[1] * 2 / Q) for i, v in f.fig.flowless_grid["at"].items()}
 
     def drag(src, dst):
         src = src.toPoint() if hasattr(src, "toPoint") else src
@@ -359,9 +362,9 @@ def main(argv) -> int:
         QTest.mouseRelease(sc, Qt.LeftButton, Qt.NoModifier, dst)
         a.processEvents()
 
-    def spot(i, x, y):                         # the pointer that puts item i at (x, y)
+    def spot(i, x, y):                         # the pointer that puts item i at (x, y) halves
         w_, h_ = sc._size(i)
-        return sc._px(*sc._half(x + w_ / 2, y + h_ / 2, 0, 0)).topLeft().toPoint()
+        return sc._px(*sc._q(x * Q / 2 + w_ / 2, y * Q / 2 + h_ / 2, 0, 0)).topLeft().toPoint()
 
     assert len(sc._boxes()) == len(f.panels()), (sc._boxes(), f.panels())
     assert sorted(at().values()) == [(0, 0), (2, 0), (4, 0)], at()
@@ -396,10 +399,10 @@ def main(argv) -> int:
     assert plots.options(w.exp)["legend"] == "grid" and at()[li] == (0, 4), at()
     drag(sc._boxes()[li].center(), sc._zones()["top"].center().toPoint())
     assert plots.options(w.exp)["legend"] == "top" and li not in at(), at()
-    before = {id(q): tuple(q["at"]) for q in f.panels() if q.get("kind") != "legend"}
+    before = {id(q): tuple(q["pos"]) for q in f.panels() if q.get("kind") != "legend"}
     f.items.insertItem(f.items.count(), f.items.takeItem(1))
     f._moved()
-    assert {id(q): tuple(q["at"]) for q in f.panels() if q.get("kind") != "legend"} == before
+    assert {id(q): tuple(q["pos"]) for q in f.panels() if q.get("kind") != "legend"} == before
     f.schema.picked.emit(1)
     assert f.sel == 1 and f.items.currentRow() == 2, "the box picks the list's line"
     f.build_bar()
@@ -476,28 +479,87 @@ def main(argv) -> int:
     own = f._own_panels()
     leg = next(q for q in own if q.get("kind") == "legend")
     pan = [q for q in own if q.get("kind") != "legend"]
-    leg["at"], pan[0]["at"] = [0, 0], [0, lh]
-    x0 = max(lw, 2) + max(lw, 2) % 2
+    Q = plots.Q
+    leg["pos"], pan[0]["pos"] = [0, 0], [0, 0.5]
+    x0 = max(1, math.ceil(lw / Q))
     for k, q in enumerate(pan[1:]):
-        q["at"] = [x0 + 2 * (k % 2), 2 * (k // 2)]
+        q["pos"] = [x0 + k % 2, k // 2]
     w.exp.figure["options"]["max_w"] = 800.0
     fig = plots.figure(w.exp)
     cells, ch = dict(fig.flowless_cells), fig.flowless_grid["cell"][1]
     H = fig.get_figheight() * 25.4
     li, pi = own.index(leg), own.index(pan[0])
-    assert lh == 1 and abs((cells[li][3] - cells[li][1]) * H - ch / 2) < 0.01, (lh, cells[li])
+    assert lh <= Q // 2 and abs((cells[li][3] - cells[li][1]) * H - lh * ch / Q) < 0.01, \
+        (lh, cells[li])
     assert abs((1 - cells[pi][3]) * H - ch / 2) < 0.01, "the panel under the legend"
     assert len({mm(ax) for ax in fig.axes}) == 1, [mm(ax) for ax in fig.axes]
     n = len(fig.legends[0].get_texts())
     assert fig.legends[0]._ncols == -(-n // 2), (n, fig.legends[0]._ncols)
     f.refresh()
     shot("3_figure_panels")
+    # the legend's handle: a quarter of a panel high, then back to its entries' size
+    hd = f.schema._handle().center().toPoint()
+    top_left = f.schema._boxes()[li].topLeft().toPoint()
+    to = f.schema._px(*f.schema._q(0, 0, lw, 1)).bottomRight().toPoint()
+    QTest.mousePress(f.schema, Qt.LeftButton, Qt.NoModifier, hd)
+    QTest.mouseMove(f.schema, to)
+    QTest.mouseRelease(f.schema, Qt.LeftButton, Qt.NoModifier, to)
+    a.processEvents()
+    own = f.panels()
+    assert own[li].get("size") == [lw / Q, 1 / Q], own[li].get("size")
+    assert f.fig.flowless_grid["at"][li][2:] == (lw, 1), f.fig.flowless_grid["at"][li]
+    f._legend_size(li, None, None)
+    assert "size" not in f.panels()[li]
+    # a panel's own shift (mm): its plot moves, the others don't; dragging it resets it
+    f.items.setCurrentRow(pi + 1)
+    ax0 = [tuple(ax.get_position().bounds) for ax in f.fig.axes]
+    f._shift(0, 3.0)
+    f._shift(1, 2.0)
+    f.render()
+    ax1 = [tuple(ax.get_position().bounds) for ax in f.fig.axes]
+    moved = [k for k, (u, v) in enumerate(zip(ax0, ax1)) if u != v]
+    assert len(moved) == 1, moved
+    k = moved[0]
+    W, H = f.fig.get_figwidth() * 25.4, f.fig.get_figheight() * 25.4
+    assert abs((ax1[k][0] - ax0[k][0]) * W - 3) < 0.01 and abs((ax0[k][1] - ax1[k][1]) * H - 2) \
+        < 0.01, (ax0[k], ax1[k])
+    f._place(pi, 0, 2, "")
+    assert "shift" not in f.panels()[pi]
+    # the legend in each panel: aligned in the plot as set (right, top, 3 mm in)
+    w.exp.figure["options"].update(legend="panel", legend_h="right", legend_v="top",
+                                   legend_dx=3.0, legend_dy=3.0)
+    fig = plots.figure(w.exp)
+    fig.canvas.draw()
+    ax = next(x for x in fig.axes if x.get_legend())
+    lb, ab = ax.get_legend().get_window_extent(), ax.get_window_extent()
+    px = fig.dpi / 25.4
+    assert abs(ab.x1 - lb.x1 - 3 * px) < 0.5 * px and abs(ab.y1 - lb.y1 - 3 * px) < 0.5 * px, \
+        (lb, ab)
     w.exp.figure.clear()
     w.exp.figure.update(keep)
     f.refresh()
     f.items.setCurrentRow(0)
     f.preset.setCurrentText("colour")
     f._apply_preset()
+    # Results: sorted by a column's title, the other way, then as computed
+    rt = w.results_tab
+    rt.mode.setCurrentIndex(0)
+    rt.refresh()
+    first = [rt.table.item(r, 0).text() for r in range(rt.table.rowCount())]
+    k = [rt.table.horizontalHeaderItem(c).text() for c in range(rt.table.columnCount())] \
+        .index(w.exp.stat)
+    rt._sort(k)
+    vals = [rt.rows()[1][r][k] for r in range(rt.table.rowCount())]
+    assert vals == sorted(vals) and rt.table.horizontalHeaderItem(k).text().endswith("▲")
+    rt._sort(k)
+    assert [rt.rows()[1][r][k] for r in range(len(vals))] == sorted(vals, reverse=True)
+    rt.table.selectRow(0)
+    rt.copy()
+    assert str(rt.rows()[1][0][0]) in QApplication.clipboard().text().splitlines()[1]
+    rt._sort(k)
+    assert [rt.table.item(r, 0).text() for r in range(rt.table.rowCount())] == first
+    assert rt.table.verticalHeader().isHidden() and "—" not in \
+        [rt.table.item(r, 2).text() for r in range(rt.table.rowCount())], "the population named"
     for ext in (".png", ".svg", ".pdf", ".tif"):
         f._write(out / f"fig{ext}")
         assert (out / f"fig{ext}").stat().st_size > 1000, ext

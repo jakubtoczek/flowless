@@ -167,10 +167,13 @@ def split_ticks(d: dict) -> dict:
 
 def migrate(fig: dict) -> dict:
     """A figure saved by an earlier version: the first's one flat dict of settings as
-    options + panels, one tick size as x and y. Changes *fig* in place."""
+    options + panels, one tick size as x and y, places in half panels. Changes *fig* in
+    place."""
     split_ticks(fig.get("options", {}))
     for p in fig.get("panels") or []:
         split_ticks(p.get("opts", {}))
+        if "at" in p:                            # 2026.10.15.1: half panels
+            p["pos"] = [v / 2 for v in p.pop("at")]
     if "style" not in fig and "width_mm" not in fig:
         return fig
     old = {k: fig.pop(k) for k in list(fig) if k not in ("options", "panels", "series")}
@@ -237,28 +240,33 @@ def _overlap(a, b) -> bool:
         b[1] < a[1] + a[3]
 
 
+Q = 4                                            # the grid's places: quarters of a panel
+
+
 def free_place(taken, w: int, h: int, per_row: int) -> tuple[int, int]:
-    """The first place, row by row, where a w × h item (half cells) overlaps none of
+    """The first place, row by row, where a w × h item (quarters) overlaps none of
     *taken* [(x, y, w, h)], *per_row* panels wide; else below them all."""
     taken = list(taken)
     bottom = max((y + hh for _, y, _, hh in taken), default=0)
-    for y in range(0, bottom, 2):
-        for x in range(0, max(2 * per_row - w, 0) + 1, 2):
+    for y in range(0, bottom, Q):
+        for x in range(0, max(Q * per_row - w, 0) + 1, Q):
             if not any(_overlap((x, y, w, h), t) for t in taken):
                 return x, y
     return 0, bottom
 
 
 def arrange(grid: list, per_row: int, legend: tuple[int, int]) -> dict:
-    """{index: (x, y, w, h)} of the grid's items [(index, item)] in half cells (y down; a
-    panel 2 × 2, the legend *legend*): while no item has a place of its own ("at", where it
-    was dragged), in rows as listed (a row ends when full or before a "newrow" item, the
-    legend a whole cell); else each at its own, one without it at the first free place."""
-    if not any(p.get("at") for _, p in grid):
-        return {i: (2 * c, 2 * r, 2, 2)
+    """{index: (x, y, w, h)} of the grid's items [(index, item)] in quarters (y down; a
+    panel Q × Q, the legend its "size" set, else *legend*): while no item has a place of its
+    own ("pos", in panels: where it was dragged), in rows as listed (a row ends when full or
+    before a "newrow" item, the legend a whole cell); else each at its own, one without it
+    at the first free place."""
+    if not any(p.get("pos") for _, p in grid):
+        return {i: (Q * c, Q * r, Q, Q)
                 for (i, _), (r, c) in zip(grid, grid_places([p for _, p in grid], per_row))}
-    size = {i: legend if p.get("kind") == "legend" else (2, 2) for i, p in grid}
-    out = {i: (*p["at"], *size[i]) for i, p in grid if p.get("at")}
+    size = {i: (tuple(round(v * Q) for v in p["size"]) if p.get("size") else legend)
+            if p.get("kind") == "legend" else (Q, Q) for i, p in grid}
+    out = {i: (*(round(v * Q) for v in p["pos"]), *size[i]) for i, p in grid if p.get("pos")}
     for i, p in grid:
         if i not in out:
             out[i] = (*free_place(out.values(), *size[i], per_row), *size[i])
@@ -403,9 +411,16 @@ def hist_axes(ax, exp, panel: dict, o: dict, styles: dict, only=None) -> None:
                   fontsize=o["label_pt"])
     _title(ax, title, o, above)
     _axis_lines(ax, o)
-    if o["legend"] == "panel":
-        ax.legend(frameon=False, loc="upper left", fontsize=o["legend_pt"],
-                  handlelength=2.2, borderaxespad=0.2, labelspacing=o["legend_space"])
+    if o["legend"] == "panel":                # aligned in the plot as set for the legend
+        seen = {}
+        for s, _, _ in order:
+            seen.setdefault(legend_name(exp, s.label, o), styles.get(s.label) or
+                            {"edge": INK, "fill": None, "dash": "-", "ctrl": False})
+        f, pos = ax.figure, ax.get_position()
+        W, H = f.get_figwidth() * 25.4, f.get_figheight() * 25.4
+        _put_legend(ax, [_handle(st, o) for st in seen.values()], list(seen),
+                    (pos.x0 * W, pos.y0 * H, pos.x1 * W, pos.y1 * H), o, W, H,
+                    _legend_size(list(seen), o, None)[0])
 
 
 def _span(exp, ch, ss, o) -> tuple[float, float]:
@@ -744,19 +759,22 @@ def _legend_size(names, o, width_mm: float | None, margins: bool = True):
     return cols, cols * entry + 2 + dx, math.ceil(n / cols) * line + 3 + dy
 
 
-def _put_legend(fig, handles, names, rect, o, W, H, ncol=1):
-    """The legend in *rect* (x0, y0, x1, y1 mm from the figure's bottom left): across left /
-    centred / right (a margin from that side), up / down top / centred / bottom (the offset
-    down, or a margin from that side)."""
+def _put_legend(where, handles, names, rect, o, W, H, ncol=1):
+    """The legend in *rect* (x0, y0, x1, y1 mm from the figure's bottom left), *where* a
+    Figure or an Axes (in each panel: rect its plot): across left / centred / right (a
+    margin from that side), up / down top / centred / bottom (the offset down, or a margin
+    from that side)."""
     x0, y0, x1, y1 = rect
     h, v, dx, dy = o["legend_h"], o["legend_v"], o["legend_dx"], o["legend_dy"]
     x = {"left": x0 + dx, "center": (x0 + x1) / 2, "right": x1 - dx}[h]
     y = {"top": y1 - dy, "center": (y0 + y1) / 2 - dy, "bottom": y0 + dy}[v]
     vv = {"top": "upper", "center": "center", "bottom": "lower"}[v]
     loc = "center" if (h, v) == ("center", "center") else f"{vv} {h}"
-    fig.legend(handles, names, loc=loc, bbox_to_anchor=(x / W, y / H), ncol=ncol,
-               frameon=False, fontsize=o["legend_pt"], handlelength=2.6, columnspacing=1.6,
-               labelspacing=o["legend_space"], borderaxespad=0, borderpad=0)
+    fig = where if isinstance(where, Figure) else where.figure
+    where.legend(handles, names, loc=loc, bbox_to_anchor=(x / W, y / H), ncol=ncol,
+                 bbox_transform=fig.transFigure, frameon=False, fontsize=o["legend_pt"],
+                 handlelength=2.6, columnspacing=1.6, labelspacing=o["legend_space"],
+                 borderaxespad=0, borderpad=0)
 
 
 def figure(exp, fig: Figure | None = None, draw: bool = True, style: dict | None = None):
@@ -780,16 +798,16 @@ def figure(exp, fig: Figure | None = None, draw: bool = True, style: dict | None
     leg_w = _legend_size(names, o, None)[1] if place == "right" and names else 0.0
     fit = max(1, int((o["max_w"] - leg_w + 0.05) // cw))     # a switch's rounding: same fit
     per_row = min(o["cols"] or fit, fit)
-    leg = (max(1, math.ceil(gw / (cw / 2) - 0.01)), max(1, math.ceil(gh / (ch / 2) - 0.01)))
+    leg = (max(1, math.ceil(gw / (cw / Q) - 0.01)), max(1, math.ceil(gh / (ch / Q) - 0.01)))
     at = arrange(grid, per_row, leg)
     gx0, gy0 = min((v[0] for v in at.values()), default=0), min((v[1] for v in at.values()),
                                                                  default=0)
     gx1 = max((v[0] + v[2] for v in at.values()), default=0)
     gy1 = max((v[1] + v[3] for v in at.values()), default=0)
-    W = (gx1 - gx0) * cw / 2 + leg_w
+    W = (gx1 - gx0) * cw / Q + leg_w
     lcols, _, leg_h = _legend_size(names, o, W) if place in ("top", "bottom") and names \
         else (1, 0, 0.0)
-    H = (gy1 - gy0) * ch / 2 + leg_h
+    H = (gy1 - gy0) * ch / Q + leg_h
     if not draw:
         return W, H
     with mpl.rc_context(_rc()):
@@ -801,11 +819,11 @@ def figure(exp, fig: Figure | None = None, draw: bool = True, style: dict | None
         clear = o["background"] == "none"
         fig.patch.set_facecolor("none" if clear else "white")
         fig.flowless_cells = []
-        if any(p.get("at") for _, p in grid) or not grid:
-            nxt = free_place(at.values(), 2, 2, per_row)
+        if any(p.get("pos") for _, p in grid) or not grid:
+            nxt = free_place(at.values(), Q, Q, per_row)
         else:
             r, c = grid_places([p for _, p in grid] + [{}], per_row)[-1]
-            nxt = (2 * c, 2 * r)
+            nxt = (Q * c, Q * r)
         top = leg_h if place == "top" else 0.0
         wide = W > o["max_w"] + 0.05
         fig.flowless_grid = {"at": at, "origin": (gx0, gy0), "cell": (cw, ch), "top": top,
@@ -815,7 +833,7 @@ def figure(exp, fig: Figure | None = None, draw: bool = True, style: dict | None
                      ha="center", va="center", color=MUTED, fontsize=8)
             return fig
         y_top = H - top
-        hw, hh = cw / 2, ch / 2
+        hw, hh = cw / Q, ch / Q
         cell = {i: ((x - gx0) * hw, y_top - (y - gy0 + h) * hh, (x - gx0 + w) * hw,
                     y_top - (y - gy0) * hh) for i, (x, y, w, h) in at.items()}  # mm, bottom up
         if wide:                       # the boxes still show it, to move a panel back
@@ -833,7 +851,8 @@ def figure(exp, fig: Figure | None = None, draw: bool = True, style: dict | None
                     _put_legend(fig, handles, names, cell[i], o, W, H, gcols)
                 continue
             po = {**merged(o, p), "_above": above}          # every title at one height
-            ax = fig.add_axes([(x0 + L) / W, (y0 + B) / H, aw / W, ah / H])
+            sx, sy = p.get("shift") or (0.0, 0.0)            # its own nudge, mm (down: +)
+            ax = fig.add_axes([(x0 + L + sx) / W, (y0 + B - sy) / H, aw / W, ah / H])
             if clear:
                 ax.patch.set_alpha(0)
             kind = p.get("kind", "histogram")

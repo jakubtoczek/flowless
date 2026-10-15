@@ -99,6 +99,7 @@ def summary_rows(exp: model.Experiment, rows: list[dict] | None = None) -> list[
             c, v = ctrl.get(g), r[exp.stat]
             out.append({"group": g, "label": r["label"],
                         "sub-population": "" if r["population"] == pop else r["population"],
+                        "population": exp.name("population", r["population"]),
                         "count": r["count"], "% parent": r["% parent"], "value": v,
                         "÷ control": v / c if c and v is not None else None, "role": r["role"]})
     return out
@@ -118,6 +119,8 @@ def replicate_rows(exp: model.Experiment, sr: list[dict] | None = None) -> list[
         seen.add(name)
         keys = list(dict.fromkeys((exp.name("label", r["label"]), r["sub-population"])
                                   for r in sr if r["group"] in pool))
+        main = " / ".join(dict.fromkeys(exp.name("population", plots.measured(exp, x))
+                                        for x in pool))       # each run's: alike, mostly
         for lab, sub in keys:
             got = [r for r in sr if r["group"] in pool and r["sub-population"] == sub
                    and exp.name("label", r["label"]) == lab]
@@ -125,6 +128,7 @@ def replicate_rows(exp: model.Experiment, sr: list[dict] | None = None) -> list[
             q = [r["÷ control"] for r in got if r["÷ control"] is not None]
             out.append({"group": name, "label": lab,
                         "sub-population": exp.name("population", sub) if sub else "",
+                        "population": exp.name("population", sub) if sub else main,
                         "n": len(v), "mean": statistics.mean(v) if v else None,
                         "sd": statistics.stdev(v) if len(v) > 1 else None,
                         "ratio mean": statistics.mean(q) if q else None,
@@ -186,10 +190,10 @@ def build(exp: model.Experiment, sections=None, full_table: bool = False) -> tup
         elif key == "results":
             parts.append(f"<h2>{name}</h2>")
             sr = summary_rows(exp, rows)
-            parts.append(table(["group", "label", "sub-population", "events", "% parent",
+            parts.append(table(["group", "label", "population", "events", "% parent",
                                 exp.stat, "÷ control"],
                                [[exp.title(r["group"]), N("label", r["label"]),
-                                 N("population", r["sub-population"]) or "—", num(r["count"]),
+                                 r["population"], num(r["count"]),
                                  num(r["% parent"], 1), num(r["value"]),
                                  num(r["÷ control"], 2)] for r in sr]))
             if full_table:
@@ -209,10 +213,10 @@ def build(exp: model.Experiment, sections=None, full_table: bool = False) -> tup
             rr = replicate_rows(exp, summary_rows(exp, rows))
             parts.append(f"<h2>{name}</h2>")
             if rr:
-                parts.append(table(["group", "label", "sub-population", "runs",
+                parts.append(table(["group", "label", "population", "runs",
                                     f"{exp.stat} (mean ± SD)", "÷ control (mean ± SD)",
                                     "each run"],
-                                   [[r["group"], r["label"], r["sub-population"] or "—",
+                                   [[r["group"], r["label"], r["population"],
                                      r["n"], f"{num(r['mean'])} ± {num(r['sd'])}",
                                      f"{num(r['ratio mean'], 2)} ± {num(r['ratio sd'], 2)}",
                                      r["runs"]] for r in rr], "small"))
@@ -366,10 +370,10 @@ def save_xlsx(exp: model.Experiment, path, sections=None) -> None:
     rec = record.clean(exp.record)
     for key in sections:
         if key == "results":
-            sheet("Summary", ["group", "label", "role", "sub-population", "events", "% parent",
+            sheet("Summary", ["group", "label", "role", "population", "events", "% parent",
                               exp.stat, "÷ control"],
                   [[exp.title(r["group"]), N("label", r["label"]), r["role"],
-                    N("population", r["sub-population"]), r["count"], r["% parent"],
+                    r["population"], r["count"], r["% parent"],
                     r["value"], r["÷ control"]] for r in summary_rows(exp, rows)])
             heads = ["group", "label", "role", "sample", "population", "parent", "count",
                      "% parent", "geometric mean", "median", "mean", "CV %", "÷ control",
@@ -380,18 +384,19 @@ def save_xlsx(exp: model.Experiment, path, sections=None) -> None:
         elif key == "replicates":
             rr = replicate_rows(exp, summary_rows(exp, rows))
             if rr:
-                sheet("Replicates", ["group", "label", "sub-population", "runs", f"{exp.stat} mean",
-                                     "SD", "÷ control mean", "SD", "each run"],
-                      [[r["group"], r["label"], r["sub-population"], r["n"], r["mean"], r["sd"],
+                sheet("Replicates", ["group", "label", "population", "runs",
+                                     f"{exp.stat} mean", "SD", "÷ control mean",
+                                     "÷ control SD", "each run"],
+                      [[r["group"], r["label"], r["population"], r["n"], r["mean"], r["sd"],
                         r["ratio mean"], r["ratio sd"], r["runs"]] for r in rr])
         elif key == "replicates":
             rr = replicate_rows(exp, summary_rows(exp, rows))
             parts.append(f"<h2>{name}</h2>")
             if rr:
-                parts.append(table(["group", "label", "sub-population", "runs",
+                parts.append(table(["group", "label", "population", "runs",
                                     f"{exp.stat} (mean ± SD)", "÷ control (mean ± SD)",
                                     "each run"],
-                                   [[r["group"], r["label"], r["sub-population"] or "—",
+                                   [[r["group"], r["label"], r["population"],
                                      r["n"], f"{num(r['mean'])} ± {num(r['sd'])}",
                                      f"{num(r['ratio mean'], 2)} ± {num(r['ratio sd'], 2)}",
                                      r["runs"]] for r in rr], "small"))
@@ -583,16 +588,16 @@ def save_pptx(exp: model.Experiment, path, sections=None) -> None:
     rr = replicate_rows(exp, sr) if "replicates" in sections else []
     tables = []
     if "results" in sections:
-        tables.append((["group", "label", "sub-pop.", "events", "% parent", exp.stat,
+        tables.append((["group", "label", "population", "events", "% parent", exp.stat,
                         "÷ control"],
                        [[exp.title(r["group"]), exp.name("label", r["label"]),
-                         exp.name("population", r["sub-population"]) or "—", num(r["count"]),
+                         r["population"], num(r["count"]),
                          num(r["% parent"], 1), num(r["value"]), num(r["÷ control"], 2)]
                         for r in sr]))
     if rr:
-        tables.append((["group", "label", "sub-pop.", "runs", f"{exp.stat} (mean ± SD)",
+        tables.append((["group", "label", "population", "runs", f"{exp.stat} (mean ± SD)",
                         "÷ control (mean ± SD)"],
-                       [[r["group"], r["label"], r["sub-population"] or "—", str(r["n"]),
+                       [[r["group"], r["label"], r["population"], str(r["n"]),
                          f"{num(r['mean'])} ± {num(r['sd'])}",
                          f"{num(r['ratio mean'], 2)} ± {num(r['ratio sd'], 2)}"] for r in rr]))
     m, head_h, pt = 0.6, 0.9, 9                            # cm, cm, table font

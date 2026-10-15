@@ -113,20 +113,27 @@ A panel shows one group:
 ### The legend
 
 Select it. Its place: below, above or right of the figure, **in the grid** (a place of its own,
-dragged like a panel), in each panel, or none. Its columns or lines (*as many as fit*, *as
+dragged like a panel), **in each panel**, or none. Its columns or lines (*as many as fit*, *as
 needed*: the default), alignment across (left / centred / right, with a margin) and up / down
-(with an offset), line spacing, size.
+(with an offset), line spacing, size. The alignment, margin and offset apply within its place:
+the grid's place, the band above or below, the column on the right, or, in each panel, the
+plot.
 
 ### Layout
 
 In the middle, the figure as **boxes**, with its size above them: **panel / plot** and the
 width × height, the columns, the width at most, the legend's place.
 
-- **Drag a box** anywhere on the grid of half panels (dotted while dragging): its outline shows
-  where it lands, red when it would cover another box (then it isn't taken). Nothing else
-  moves. A panel can sit half a panel down, between two rows, or half a panel across; the
-  legend takes as many halves as it needs, so two lines of it fit in half a place above or
-  below a panel.
+- **Drag a box** anywhere on the grid of quarter panels (dotted while dragging, halves a
+  little brighter): its outline shows where it lands, red when it would cover another box
+  (then it isn't taken). Nothing else moves. A panel can sit half a panel down, between two
+  rows, or a quarter across.
+- **The legend's place** takes as many quarters as its entries need; drag its corner **◢** to
+  size it (down to a quarter of a panel each way); right-click it: *Size: as its entries
+  need* undoes that.
+- **A panel's shift** (in the Panel box, mm across and down) nudges its plot inside its place,
+  the others staying put; dragging the panel elsewhere sets it back to 0. The margins
+  themselves are the figure's, one set, so that every plot stays the same size.
 - **+** adds a panel at the first free place. Right-click a box for its menu.
 - **Columns** puts the panels back in rows of that many, in the list's order (the places
   they were dragged to are dropped). *As many as fit*: by the width.
@@ -154,8 +161,12 @@ PDF (the text stays text); **Colour + B&W…** both at once.
   ÷ control, each run's value.
 - **Every sample and population**: count, % of parent, geometric mean, median, mean, CV.
 
-The value and the channel measured are chosen here. **⧉** (Ctrl+C) copies the table, to paste
-as a table in Excel, Word or PowerPoint; **Export…** writes `.xlsx` (every sheet) or `.csv`.
+*Population* names what was measured: the population each group's figure shows, or a range
+below it (◆: the sample's own version of the gate). **Click a column's title** to sort by it,
+again for the other way, a third time for the order as computed (empty cells always last);
+hover a title for what the column is. The value and the channel measured are chosen here.
+**⧉** (Ctrl+C: the selected rows, else all) copies the table as shown, to paste as a table in
+Excel, Word or PowerPoint; **Export…** writes `.xlsx` (every sheet) or `.csv`.
 
 ## Experiment
 

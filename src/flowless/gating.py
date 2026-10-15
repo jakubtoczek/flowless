@@ -837,7 +837,8 @@ class GatingTab(QWidget):
         x, y = self.xy
         o = {**plots.options(exp), "legend": "panel", "layout": "overlay", "title_pt": 9,
              "label_pt": 8.5, "xtick_pt": 7.5, "ytick_pt": 7.5, "legend_pt": 7.5, "gate_pt": 7.5,
-             "fill": False,
+             "fill": False, "legend_h": "left", "legend_v": "top", "legend_dx": 2.0,
+             "legend_dy": 1.0, "legend_rows": 0, "legend_cols": 1, "legend_space": 0.5,
              "y": self.ny.currentData() or "count"}
         # the dot plot: the selected polygon's parent on its axes, else the selected
         # population's events with its polygons below

@@ -38,8 +38,8 @@ log at the bottom says what happened and what looks wrong (✗ ⚠). The tabs fo
    the one the figure and the values use.
 3. **Figure** — its panels and the legend: drag their boxes where they go; sizes in mm,
    fonts, colour or black & white. **Save…** (PNG, TIFF, SVG, PDF) or **Copy**.
-4. **Results** — the values (geometric mean…, ÷ control, replicates pooled); **⧉** copies
-   the table for Excel, Word or PowerPoint.
+4. **Results** — the values (geometric mean…, ÷ control, replicates pooled); click a
+   column's title to sort; **⧉** copies the table for Excel, Word or PowerPoint.
 5. **Experiment** — what was done: cells, reagents, procedure; what a MIFlowCyt report still
    lacks.
 
