@@ -16,9 +16,10 @@ import math
 import numpy as np
 from matplotlib.colors import LinearSegmentedColormap, LogNorm, to_rgba
 from matplotlib.figure import Figure
-from matplotlib.ticker import FuncFormatter, LogLocator, NullFormatter
+from matplotlib.ticker import (FixedFormatter, FixedLocator, FuncFormatter, LogLocator,
+                               NullFormatter, NullLocator)
 
-from . import model
+from . import model, scale
 
 # categorical slots, in order (validated palette: adjacent pairs clear CVD ΔE 8 in light
 # mode); a label keeps its slot in every panel. The negative control is the grey reference.
@@ -38,14 +39,16 @@ KINDS = [("histogram", "Histograms"), ("dot", "Dot plot"), ("bars", "Values (bar
 Y_LABEL = {"mode": "% of max", "count": "Count", "area": "% of events / channel"}
 
 
-def _o(key, label, section, kind, default, scope="both", shown=True, bar=False, **kw):
+def _o(key, label, section, kind, default, scope="both", shown=True, bar=False,
+       paired=False, **kw):
     return dict(key=key, label=label, section=section, kind=kind, default=default,
-                scope=scope, shown=shown, bar=bar, **kw)
+                scope=scope, shown=shown, bar=bar, paired=paired, **kw)
 
 
 # every figure option: section, widget, default; scope "fig" = the figure's only, "both" =
 # a panel may override it; shown = in the option list unless hidden in Options ▸ Figure;
-# bar = set on the layout's bar (over the boxes), not in the list
+# bar = set on the layout's bar (over the boxes), not in the list; paired = a tick in
+# another option's row (its `show`)
 OPTIONS = [
     _o("bw", "black & white", "Style", "check", False,
        tip="black lines with dashes, the control filled grey: for print"),
@@ -68,10 +71,21 @@ OPTIONS = [
     _o("gate_lines", "range limits as dotted lines", "Style", "check", True, shown=False),
     _o("values", "value of each sample", "Style", "check", True,
        tip="bars: the value written above each bar"),
-    _o("title_pt", "titles", "Text", "float", 9.0, lo=4, hi=40, step=0.5, suffix=" pt"),
-    _o("label_pt", "axis labels", "Text", "float", 8.0, lo=4, hi=40, step=0.5, suffix=" pt"),
-    _o("xtick_pt", "x tick labels", "Text", "float", 7.0, lo=4, hi=40, step=0.5, suffix=" pt"),
-    _o("ytick_pt", "y tick labels", "Text", "float", 7.0, lo=4, hi=40, step=0.5, suffix=" pt"),
+    # a size and the ticks before it that show or hide those texts (`show`: their keys)
+    _o("title_pt", "titles", "Text", "float", 9.0, lo=4, hi=40, step=0.5, suffix=" pt",
+       show=["show_title"]),
+    _o("label_pt", "axis titles", "Text", "float", 8.0, lo=4, hi=40, step=0.5, suffix=" pt",
+       show=["show_xlabel", "show_ylabel"]),
+    _o("xtick_pt", "x tick labels", "Text", "float", 7.0, lo=4, hi=40, step=0.5, suffix=" pt",
+       show=["show_xticks"]),
+    _o("ytick_pt", "y tick labels", "Text", "float", 7.0, lo=4, hi=40, step=0.5, suffix=" pt",
+       show=["show_yticks"]),
+    _o("show_title", "", "Text", "check", True, paired=True, tip="the panels' titles"),
+    _o("show_xlabel", "x", "Text", "check", True, paired=True, tip="the x axis' title"),
+    _o("show_ylabel", "y", "Text", "check", True, paired=True, tip="the y axis' title"),
+    _o("show_xticks", "", "Text", "check", True, paired=True,
+       tip="the x axis' numbers (bars: the series' names)"),
+    _o("show_yticks", "", "Text", "check", True, paired=True, tip="the y axis' numbers"),
     _o("gate_pt", "range labels", "Text", "float", 7.0, lo=4, hi=40, step=0.5, suffix=" pt"),
     _o("legend_pt", "legend", "Text", "float", 7.5, lo=4, hi=40, step=0.5, suffix=" pt",
        scope="fig"),
@@ -123,6 +137,7 @@ OPTIONS = [
 ]
 SPEC = {o["key"]: o for o in OPTIONS}
 DEFAULTS = {o["key"]: o["default"] for o in OPTIONS}
+ALL_TEXT = {k: True for k in DEFAULTS if k.startswith("show_")}   # the window's own plots
 LEGEND_KEYS = ["legend", "legend_pt", "legend_cols", "legend_rows", "legend_h", "legend_v",
                "legend_dx", "legend_dy", "legend_space"]
 PRESETS = {
@@ -267,7 +282,7 @@ def arrange(grid: list, per_row: int, legend: tuple[int, int]) -> dict:
     size = {i: (tuple(round(v * Q) for v in p["size"]) if p.get("size") else legend)
             if p.get("kind") == "legend" else (Q, Q) for i, p in grid}
     out = {i: (*(round(v * Q) for v in p["pos"]), *size[i]) for i, p in grid if p.get("pos")}
-    for i, p in grid:
+    for i, _ in grid:
         if i not in out:
             out[i] = (*free_place(out.values(), *size[i], per_row), *size[i])
     return out
@@ -347,16 +362,15 @@ def hist_axes(ax, exp, panel: dict, o: dict, styles: dict, only=None) -> None:
     group = panel.get("group", "")
     ch = panel.get("x") or exp.marker
     pop = panel.get("population") or exp.main_population(group)
-    curves, top = [], 0.0
+    kind = exp.scale(ch)
     ss = only if only is not None else panel_samples(exp, panel)
+    top = _top(ss, ch)
+    curves = []
     for s in ss:
-        if ch not in s.fcs.data:
-            continue
         m = exp.masks(s).get(pop)
-        if m is None:
+        if m is None or ch not in s.fcs.data:
             continue
-        top = max(top, s.fcs.range(ch) or s.fcs.data[ch].max())
-        x, h = model.histogram(s.fcs.data[ch][m], top or 1e7, smooth=o["smooth"])
+        x, h = model.histogram(s.fcs.data[ch][m], top, smooth=o["smooth"], kind=kind)
         if o["y"] == "mode" and h.max():
             h = 100 * h / h.max()
         elif o["y"] == "area" and h.sum():
@@ -383,23 +397,18 @@ def hist_axes(ax, exp, panel: dict, o: dict, styles: dict, only=None) -> None:
                             alpha=1.0 if bw else o["fill_alpha"], lw=0, zorder=2 + i)
         ax.plot(x, base + h, color=sty["edge"], ls=sty["dash"], lw=o["lw"], zorder=3 + i,
                 solid_capstyle="round", label=legend_name(exp, s.label, o))
-        if step:
-            ax.text(10 ** (o["x_lo"] + 0.15), base + 0.08 * peak, exp.name("label", s.label),
-                    fontsize=o["ytick_pt"], color=INK, va="bottom", ha="left", zorder=20)
-    x0, x1 = _span(exp, ch, ss, o)
-    ax.set_xscale("log")
-    ax.set_xlim(x0, x1)
+        if step:                                  # its name at the left, over its baseline
+            ax.text(0.02, base + 0.08 * peak, exp.name("label", s.label),
+                    fontsize=o["ytick_pt"], color=INK, va="bottom", ha="left", zorder=20,
+                    transform=ax.get_yaxis_transform())
+    x0, x1 = _span(kind, top, o)
+    _axis(ax, "x", kind, top, (x0, x1), o)
     ax.set_ylim(0, (len(order) - 1) * step + peak * 1.04)
     above = 0.0
     if o["gates"]:
         above = _ranges(ax, exp, model_ranges(
             exp, group, pop, ch, only[0] if only is not None and len(only) == 1 else None),
-            o, x0, x1)
-    w_pt = ax.get_position().width * ax.figure.get_figwidth() * 72
-    ax.xaxis.set_major_locator(LogLocator(base=10, numticks=max(3, min(12, int(
-        w_pt / (o["xtick_pt"] * 2.3)) + 1))))         # '10⁶' takes about 2 em
-    ax.xaxis.set_minor_locator(LogLocator(base=10, subs=np.arange(2, 10), numticks=12))
-    ax.xaxis.set_minor_formatter(NullFormatter())
+            o, x0, x1, kind, top)
     if o["y"] == "mode" and not step:
         ax.set_yticks([0, 25, 50, 75, 100])
     for side in ("top", "right"):
@@ -408,9 +417,8 @@ def hist_axes(ax, exp, panel: dict, o: dict, styles: dict, only=None) -> None:
         ax.set_yticks([])
         ax.spines["left"].set_visible(False)
     _tick_sizes(ax, o)
-    ax.set_xlabel(exp.name("channel", ch), fontsize=o["label_pt"])
-    ax.set_ylabel(Y_LABEL.get(o["y"], "Count") + (" (offset)" if step else ""),
-                  fontsize=o["label_pt"])
+    _labels(ax, o, exp.name("channel", ch), Y_LABEL.get(o["y"], "Count") +
+            (" (offset)" if step else ""))
     _title(ax, title, o, above)
     _axis_lines(ax, o)
     if o["legend"] == "panel":                # aligned in the plot as set for the legend
@@ -425,16 +433,66 @@ def hist_axes(ax, exp, panel: dict, o: dict, styles: dict, only=None) -> None:
                     _legend_size(list(seen), o, None)[0])
 
 
-def _span(exp, ch, ss, o) -> tuple[float, float]:
-    """A histogram's x range: 10^x_lo (else 1) to 10^x_hi (else the files' top)."""
-    top = max((s.fcs.range(ch) or s.fcs.data[ch].max() for s in ss if ch in s.fcs.data),
-              default=0)
-    return (10 ** o["x_lo"] if o["x_lo"] else 1), (10 ** o["x_hi"] if o["x_hi"] else top or 1e7)
+def _top(ss, ch) -> float:
+    """The top of *ch*'s scale over the samples ($PnR, else their highest event)."""
+    return max((s.fcs.range(ch) or float(s.fcs.data[ch].max()) for s in ss
+                if ch in s.fcs.data and s.fcs.n), default=0.0) or 1e7
+
+
+def _span(kind, top, o) -> tuple[float, float]:
+    """A histogram's x range: 10^x_lo (else 1; logicle: its bottom) to 10^x_hi (else the
+    scale's top)."""
+    lo = float(scale.inverse(kind, 0.0, top)) if kind.startswith("logicle") else \
+        (10 ** o["x_lo"] if o["x_lo"] else 1)
+    return lo, (10 ** o["x_hi"] if o["x_hi"] else top)
+
+
+def _axis(ax, which: str, kind: str, top: float, lims, o: dict) -> None:
+    """One axis of *ax* on *kind* ('' linear, 'log', 'logicle') between *lims*: log, its
+    decades labelled as many as fit; logicle, 0 and ±10ⁿ. The minor ticks are one line of
+    marks: a Tick object each (8 a decade, every panel) was 40 % of drawing a figure."""
+    x = which == "x"
+    axis = ax.xaxis if x else ax.yaxis
+    set_scale, set_lim = (ax.set_xscale, ax.set_xlim) if x else (ax.set_yscale, ax.set_ylim)
+    if not kind:
+        set_lim(*lims)
+        return
+    if kind.startswith("logicle"):
+        set_scale("function", functions=(lambda v: scale.forward(kind, v, top),
+                                          lambda d: scale.inverse(kind, d, top)))
+        major, labels, minor = scale.ticks(kind, top)
+        axis.set_major_locator(FixedLocator(major))
+        axis.set_major_formatter(FixedFormatter(labels))
+    else:
+        set_scale("log")
+        pos = ax.get_position()
+        pt = (pos.width * ax.figure.get_figwidth() if x else
+              pos.height * ax.figure.get_figheight()) * 72
+        em = o["xtick_pt"] * 2.3 if x else o["ytick_pt"] * 1.6    # '10⁶' about 2 em wide
+        axis.set_major_locator(LogLocator(base=10, numticks=max(3, min(12, int(pt / em) + 1))))
+        minor = [k * 10.0 ** e for e in range(0, 10) for k in range(2, 10)]
+    axis.set_minor_locator(NullLocator())
+    axis.set_minor_formatter(NullFormatter())
+    set_lim(*lims)
+    lo, hi = sorted(lims)
+    v = [m for m in minor if lo < m < hi]
+    if v:
+        z = [0.0] * len(v)
+        ax.plot(v if x else z, z if x else v, ls="none", marker=3 if x else 0, ms=1.6,
+                mew=o["axis_lw"] * 0.67, color="black", clip_on=False, zorder=2.5,
+                in_layout=False, transform=ax.get_xaxis_transform() if x else
+                ax.get_yaxis_transform())
 
 
 def _tick_sizes(ax, o: dict) -> None:
-    ax.tick_params(axis="x", labelsize=o["xtick_pt"])
-    ax.tick_params(axis="y", labelsize=o["ytick_pt"])
+    ax.tick_params(axis="x", labelsize=o["xtick_pt"], labelbottom=o["show_xticks"])
+    ax.tick_params(axis="y", labelsize=o["ytick_pt"], labelleft=o["show_yticks"])
+
+
+def _labels(ax, o: dict, x: str, y: str) -> None:
+    """The axis titles, the ones shown."""
+    ax.set_xlabel(x if o["show_xlabel"] else "", fontsize=o["label_pt"])
+    ax.set_ylabel(y if o["show_ylabel"] else "", fontsize=o["label_pt"])
 
 
 def _axis_lines(ax, o: dict) -> None:
@@ -468,7 +526,9 @@ def _room(ax, o: dict) -> float:
 def _title(ax, title: str, o: dict, above: float = 0.0) -> None:
     """The panel's title at its size, on more lines when wider than the panel (the
     figure leaves room for them: _margins), over *above* pt of range labels or the
-    figure's "_above" (every title of a figure at one height)."""
+    figure's "_above" (every title of a figure at one height); none when titles are off."""
+    if not o["show_title"]:
+        return
     ax.set_title(wrap(title, _room(ax, o), o["title_pt"]), fontsize=o["title_pt"], color=INK,
                  pad=3 + max(above, o.get("_above", 0.0)), linespacing=1.1)
 
@@ -494,21 +554,23 @@ def range_space(exp, p: dict, o: dict, w_pt: float) -> float:
     ranges = model_ranges(exp, g, p.get("population") or exp.main_population(g), ch)
     if not ranges:
         return 0.0
-    return _place(exp, ranges, o, *_span(exp, ch, panel_samples(exp, p), o), w_pt)[1] * _band(o)
+    kind, top = exp.scale(ch), _top(panel_samples(exp, p), ch)
+    return _place(exp, ranges, o, *_span(kind, top, o), w_pt, kind, top)[1] * _band(o)
 
 
-def _ranges(ax, exp, gates, o, x0, x1) -> float:
+def _ranges(ax, exp, gates, o, x0, x1, kind, top) -> float:
     """Each range as a bracket above the axes, its name over it; ranges that overlap take
     the next row up. Returns the pt they take."""
     fig = ax.figure
-    placed, n = _place(exp, gates, o, x0, x1, ax.get_position().width * fig.get_figwidth() * 72)
+    placed, n = _place(exp, gates, o, x0, x1, ax.get_position().width * fig.get_figwidth() * 72,
+                       kind, top)
     if not placed:
         return 0.0
     h_pt = max(ax.get_position().height * fig.get_figheight() * 72, 30)
     tr = ax.get_xaxis_transform()                 # x: data, y: in axes heights
     t = (0.2 * o["gate_pt"] + 1) / h_pt           # a bracket's end, half
     kw = dict(color=INK, lw=o["axis_lw"] * 1.3, zorder=30, clip_on=False, transform=tr)
-    for g, lo, hi, r, cx, name in placed:
+    for _, lo, hi, r, cx, name in placed:
         y = 1 + (2 + r * _band(o)) / h_pt + t     # row 0: its ends 2 pt over the axes
         ax.plot([lo, hi], [y, y], solid_capstyle="butt", **kw)
         ax.plot([lo, lo], [y - t, y + t], **kw)
@@ -523,22 +585,26 @@ def _ranges(ax, exp, gates, o, x0, x1) -> float:
     return n * _band(o)
 
 
-def _place(exp, gates, o, x0, x1, w_pt) -> tuple[list, int]:
+def _place(exp, gates, o, x0, x1, w_pt, kind="log", top=1e7) -> tuple[list, int]:
     """([(gate, lo, hi, row, label's centre, name)], rows): a range whose bracket or label
     would overlap another's takes the next row up."""
-    L0, L1 = math.log10(x0), math.log10(x1)
+    def f(v):                      # along the axis, in its display units
+        return float(scale.forward(kind, v, top))
+
+    L0, L1 = f(x0), f(x1)
     dec_per_pt = (L1 - L0) / max(w_pt, 30)
-    rows, placed = [], []          # rows: [(bracket, label)] taken, each (from, to) log10 x
-    for g in sorted(gates, key=lambda g: g.lo or 0):
-        lo, hi = max(g.lo or x0, x0), min(g.hi or x1, x1)
+    rows, placed = [], []          # rows: [(bracket, label)] taken, each (from, to) on the axis
+    for g in sorted(gates, key=lambda g: g.lo if g.lo is not None else x0):
+        lo = x0 if g.lo is None else max(g.lo, x0)
+        hi = x1 if g.hi is None else min(g.hi, x1)
         if hi <= lo:
             continue
         name = exp.name("population", g.name)
         half = len(name) * o["gate_pt"] * 0.55 / 2 * dec_per_pt
-        c = (math.log10(lo) + math.log10(hi)) / 2
+        c = (f(lo) + f(hi)) / 2
         c = min(max(c, L0 + half), L1 - half)                 # the label inside the axes
         gap = o["gate_pt"] * 0.6 * dec_per_pt
-        br, lab = (math.log10(lo), math.log10(hi)), (c - half, c + half)
+        br, lab = (f(lo), f(hi)), (c - half, c + half)
         tol = 1e-3
 
         def free(taken):           # brackets may touch (medium | high), labels keep a gap
@@ -549,7 +615,7 @@ def _place(exp, gates, o, x0, x1, w_pt) -> tuple[list, int]:
         if r == len(rows):
             rows.append([])
         rows[r].append((br, lab))
-        placed.append((g, lo, hi, r, 10 ** c, name))
+        placed.append((g, lo, hi, r, float(scale.inverse(kind, c, top)), name))
     return placed, len(rows)
 
 
@@ -565,10 +631,12 @@ def _linear_ticks(axis, top: float) -> str:
 
 def dot_axes(ax, exp, samples: list, x: str, y: str, parent: str = "", gates=None,
              o: dict | None = None, title: str = "", edit: str = "") -> None:
-    """Events of *samples* (their *parent* population, pooled) on x/y as a density; each
-    of *gates* (polygons on x/y) drawn with its % of those events (*edit*: that one's %
-    only, an editor draws it)."""
+    """Events of *samples* (their *parent* population, pooled) on x/y as a density, the
+    scatter channels linear, fluorescence log (logicle with values below 0); each of
+    *gates* (polygons on x/y) drawn with its % of those events (*edit*: that one's % only,
+    an editor draws it)."""
     o = {**DEFAULTS, **(o or {})}
+    xs, ys = exp.scale(x, dot=True), exp.scale(y, dot=True)
     X, Y, rx, ry, keep = [], [], 0.0, 0.0, []
     for s in samples:
         f = s.fcs
@@ -587,16 +655,22 @@ def dot_axes(ax, exp, samples: list, x: str, y: str, parent: str = "", gates=Non
         return
     X, Y = np.concatenate(X), np.concatenate(Y)
     X, Y = np.minimum(X, rx - 1), np.minimum(Y, ry - 1)    # off-scale: on the edge
-    h, _, _ = np.histogram2d(X, Y, bins=200, range=[[0, rx], [0, ry]])
-    ax.imshow(np.ma.masked_less(h.T, 1), origin="lower", extent=(0, rx, 0, ry),
-              aspect="auto", cmap=GREYS if o["bw"] else DENSITY,
-              norm=LogNorm(vmin=1, vmax=max(2, h.max())),
-              interpolation="nearest", rasterized=True)
-    ax.set_xlim(0, rx)
-    ax.set_ylim(0, ry)
-    sx, sy = _linear_ticks(ax.xaxis, rx), _linear_ticks(ax.yaxis, ry)
-    ax.set_xlabel(exp.name("channel", x) + sx, fontsize=o["label_pt"])
-    ax.set_ylabel(exp.name("channel", y) + sy, fontsize=o["label_pt"])
+    sx, sy = scale.span(xs, rx), scale.span(ys, ry)
+    h, ex, ey = np.histogram2d(scale.events(xs, X, rx), scale.events(ys, Y, ry), bins=200,
+                               range=[[0, sx], [0, sy]])
+    kw = dict(cmap=GREYS if o["bw"] else DENSITY, norm=LogNorm(vmin=1, vmax=max(2, h.max())),
+              rasterized=True)
+    if xs or ys:                                   # bins even on the axes, not in values
+        ax.pcolormesh(scale.inverse(xs, ex, rx), scale.inverse(ys, ey, ry),
+                      np.ma.masked_less(h.T, 1), **kw)
+    else:
+        ax.imshow(np.ma.masked_less(h.T, 1), origin="lower", extent=(0, rx, 0, ry),
+                  aspect="auto", interpolation="nearest", **kw)
+    _axis(ax, "x", xs, rx, (float(scale.inverse(xs, 0.0, rx)), rx), o)
+    _axis(ax, "y", ys, ry, (float(scale.inverse(ys, 0.0, ry)), ry), o)
+    ux = "" if xs else _linear_ticks(ax.xaxis, rx)
+    uy = "" if ys else _linear_ticks(ax.yaxis, ry)
+    _labels(ax, o, exp.name("channel", x) + ux, exp.name("channel", y) + uy)
     _tick_sizes(ax, o)
     _axis_lines(ax, o)
     if title:
@@ -604,29 +678,44 @@ def dot_axes(ax, exp, samples: list, x: str, y: str, parent: str = "", gates=Non
     n = len(X)
     w_pt = max(ax.get_position().width * ax.figure.get_figwidth() * 72, 30)
     h_pt = max(ax.get_position().height * ax.figure.get_figheight() * 72, 30)
-    lab_h = 2.9 * o["gate_pt"] / h_pt * ry          # two lines and a gap, in data units
+    lab_h = 2.9 * o["gate_pt"] / h_pt              # two lines and a gap, in axes heights
+    frac = ax.transScale + ax.transLimits          # values -> axes fractions, any scale
     taken = []                                     # (x0, x1, y0, y1) of the labels so far
     for g in gates or []:
         if g.kind != "polygon" or len(g.vertices) < 3:
             continue
-        v = np.asarray(g.vertices + g.vertices[:1], float)
+        v = outline(g, xs, ys, rx, ry)
         if g.name != edit:
             ax.plot(v[:, 0], v[:, 1], color=INK, lw=0.9, clip_on=False, zorder=5)
         inside = sum(int((ms[g.name] & base).sum()) for s, ms, base in keep if g.name in ms)
         pct = 100 * inside / n if n else 0
         name = exp.name("population", g.name)
-        half = max(len(name), 7) * o["gate_pt"] * 0.55 / 2 / w_pt * rx
-        cx = min(max(v[:, 0].mean(), half), rx - half)
-        y0 = v[:, 1].max()                         # above the gate, else inside its top
-        if y0 + lab_h > ry:
-            y0 = v[:, 1].max() - 0.02 * ry - lab_h
-        while any(cx - half < b and cx + half > a and y0 < d and y0 + lab_h > c
-                  for a, b, c, d in taken):        # over another label: below it
-            y0 = min(c for a, b, c, d in taken if cx - half < b and cx + half > a
+        a = frac.transform(v)
+        half = max(len(name), 7) * o["gate_pt"] * 0.55 / 2 / w_pt
+        cx = min(max(a[:-1, 0].mean(), half), 1 - half)
+        y0 = a[:, 1].max()                         # above the gate, else inside its top
+        if y0 + lab_h > 1:
+            y0 = a[:, 1].max() - 0.02 - lab_h
+        while any(cx - half < b and cx + half > p and y0 < d and y0 + lab_h > c
+                  for p, b, c, d in taken):        # over another label: below it
+            y0 = min(c for p, b, c, d in taken if cx - half < b and cx + half > p
                      and y0 < d and y0 + lab_h > c) - lab_h
         taken.append((cx - half, cx + half, y0, y0 + lab_h))
         ax.text(cx, y0, f"{name}\n{pct:.1f} %", ha="center", va="bottom",
-                fontsize=o["gate_pt"], color=INK, zorder=6)
+                fontsize=o["gate_pt"], color=INK, zorder=6, transform=ax.transAxes)
+
+
+def outline(g, xs: str, ys: str, rx: float, ry: float) -> np.ndarray:
+    """A polygon's closed outline in values, for a plot on scales *xs* × *ys*: its corners,
+    or - drawn on other scales - along each side the curve that straight side makes here."""
+    v = np.asarray(g.vertices + g.vertices[:1], float)
+    if (g.xs, g.ys) == (xs, ys):
+        return v
+    t = np.linspace(0, 1, 24)[None, :, None]
+    d = np.column_stack([scale.forward(g.xs, v[:, 0], rx), scale.forward(g.ys, v[:, 1], ry)])
+    seg = (d[:-1, None, :] * (1 - t) + d[1:, None, :] * t).reshape(-1, 2)
+    return np.column_stack([scale.inverse(g.xs, seg[:, 0], rx),
+                            scale.inverse(g.ys, seg[:, 1], ry)])
 
 
 def bars_axes(ax, exp, panel: dict, o: dict, styles: dict) -> None:
@@ -682,9 +771,8 @@ def bars_axes(ax, exp, panel: dict, o: dict, styles: dict) -> None:
                       + runs[i])
             ax.text(i, top * 1.12, model_num(v), ha="center", va="bottom",
                     fontsize=o["gate_pt"], color=INK, zorder=4)
-    ax.set_yscale("log")
     good = [v for v in vals if v] + [x for r in runs for x in r]
-    ax.set_ylim(floor, max(good) * (6 if o["values"] else 2))
+    _axis(ax, "y", "log", 0, (floor, max(good) * (6 if o["values"] else 2)), o)
     ax.set_xticks(range(len(ss)))
     ax.set_xticklabels([exp.name("label", s.label) for s in ss], rotation=35, ha="right",
                        rotation_mode="anchor")
@@ -692,7 +780,7 @@ def bars_axes(ax, exp, panel: dict, o: dict, styles: dict) -> None:
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
     _tick_sizes(ax, o)
-    ax.set_ylabel(f"{exp.stat}, {exp.name('channel', ch)}", fontsize=o["label_pt"])
+    _labels(ax, o, "", f"{exp.stat}, {exp.name('channel', ch)}")
     _title(ax, title, o)
     _axis_lines(ax, o)
 
@@ -707,11 +795,12 @@ def _margins(o: dict, kind: str, lines: int = 1) -> tuple[float, float, float, f
     """(left, bottom, right, top) mm around a panel's axes, from its fonts; *lines*: of its
     title."""
     noy = kind == "histogram" and o["layout"] == "offset"
-    left = (o["label_pt"] * 1.3 + 5 if noy else o["ytick_pt"] * 2.4 + o["label_pt"] * 1.3 + 7)
-    bottom = o["xtick_pt"] * 1.4 + o["label_pt"] * 1.3 + 6
-    if kind == "bars":
-        bottom += o["xtick_pt"] * 2.2
-    top = o["title_pt"] * (1.45 + 1.1 * (lines - 1)) + 3
+    ylab = o["label_pt"] * 1.3 if o["show_ylabel"] else 0
+    xlab = o["label_pt"] * 1.3 if o["show_xlabel"] else 0
+    xt = o["xtick_pt"] * (1.4 + (2.2 if kind == "bars" else 0)) if o["show_xticks"] else 0
+    left = ylab + (5 if noy else 7 + (o["ytick_pt"] * 2.4 if o["show_yticks"] else 0))
+    bottom = xt + xlab + 6
+    top = (o["title_pt"] * (1.45 + 1.1 * (lines - 1)) if o["show_title"] else 0) + 3
     right = o["xtick_pt"] * 1.3 + 2
     return left * PT, bottom * PT, right * PT, top * PT
 

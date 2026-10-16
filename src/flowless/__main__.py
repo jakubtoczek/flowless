@@ -8,6 +8,7 @@ from pathlib import Path
 from . import winshell
 
 _PKG = Path(__file__).resolve().parent  # this package's folder
+_crashes = None                         # flowless_errors.log, for faulthandler
 
 
 def _apply_dark(app):
@@ -71,7 +72,16 @@ def _splash():
 
 
 def main() -> int:
+    import faulthandler
+
     from PySide6.QtWidgets import QApplication
+
+    global _crashes                         # open as long as the app runs: a hard crash's
+    try:                                    # trace lands there (pythonw has no console)
+        _crashes = open(_PKG.parents[1] / "flowless_errors.log", "a", encoding="utf-8")
+        faulthandler.enable(_crashes)
+    except OSError:
+        pass
 
     winshell.taskbar_identity("Flowless", "Flowless", _PKG.parents[1] / "Flowless.bat",
                               _PKG / "assets" / "flowless.ico")  # before any window

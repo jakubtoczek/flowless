@@ -5,6 +5,7 @@ gatingml Gating-ML 2.0 (.xml), the standard for gates: read, and written (the on
 flowjo   a FlowJo workspace (.wsp): its gates (read, not named in the window)
 sheet    a procedure sheet (.xlsx, free-form as written at the bench): steps, reagents,
          each tube's condition
+accuri   a BD Accuri C6 workspace (.ci): its samples and gates (read, not named in the window)
 """
 
 from __future__ import annotations
@@ -14,15 +15,16 @@ from pathlib import Path
 
 def kind(p: Path) -> str:
     """What a dropped / opened path is: fcs, experiment, gatingml, gates (a workspace),
-    sheet, or ''."""
+    sheet, accuri, or ''."""
     ext = p.suffix.lower()
     if p.is_dir() or ext == ".fcs":
         return "fcs"
     if ext == ".xml":
         from . import gatingml
         return "gatingml" if gatingml.is_gatingml(p) else ""
-    return {".json": "experiment", ".wsp": "gates", ".xlsx": "sheet", ".xlsm": "sheet"}.get(ext, "")
+    return {".json": "experiment", ".wsp": "gates", ".xlsx": "sheet", ".xlsm": "sheet",
+            ".ci": "accuri"}.get(ext, "")
 
 
-FILTER = ("Everything Flowless reads (*.fcs *.json *.xml *.wsp *.xlsx *.xlsm);;FCS (*.fcs);;"
+FILTER = ("Everything Flowless reads (*.fcs *.json *.xml *.wsp *.ci *.xlsx *.xlsm);;FCS (*.fcs);;"
           "Flowless experiment (*.json);;Gates, Gating-ML 2.0 (*.xml)")

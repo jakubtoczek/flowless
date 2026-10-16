@@ -6,6 +6,7 @@ channel. numpy only.
 
 from __future__ import annotations
 
+import functools
 import re
 import sys
 from dataclasses import dataclass, field
@@ -20,11 +21,22 @@ class FCS:
     meta: dict[str, str]                 # every TEXT keyword, as written ($ and # kept)
     channels: list[str]                  # $PnN, in file order
     labels: list[str]                    # $PnS ("PE-A"), "" when absent
-    data: dict[str, np.ndarray] = field(repr=False)   # channel -> float64 events
+    data: dict[str, np.ndarray] = field(repr=False)   # channel -> float32 events
 
     @property
     def n(self) -> int:
         return len(next(iter(self.data.values()))) if self.data else 0
+
+    @functools.cached_property
+    def negative(self) -> dict[str, float]:
+        """The channels with values below 0 (compensated data: a logicle axis for them),
+        each with its negatives' 5th percentile (how wide that axis' linear part is)."""
+        out = {}
+        for c, a in self.data.items():
+            neg = a[a < 0]
+            if neg.size:
+                out[c] = float(np.percentile(neg, 5))
+        return out
 
     def label(self, ch: str) -> str:
         """'FL2-A :: PE-A', as FlowJo writes it; the bare name when there's no $PnS."""
@@ -51,14 +63,21 @@ def _text(raw: bytes) -> dict[str, str]:
     return {k.strip(): v.strip() for k, v in zip(parts[0::2], parts[1::2])}
 
 
+def text_of(b: bytes) -> dict[str, str]:
+    """The TEXT keywords of an FCS file's bytes (its first few kB are enough)."""
+    head = b[:58].decode("ascii", errors="replace")
+    t0, t1 = (int(head[a:a + 8].strip() or 0) for a in (10, 18))
+    return _text(b[t0:t1 + 1])
+
+
 def read(path) -> FCS:
     path = Path(path)
     b = path.read_bytes()
     if not b[:3] == b"FCS":
         raise ValueError(f"{path.name}: not an FCS file")
     head = b[:58].decode("ascii", errors="replace")
-    t0, t1, d0, d1 = (int(head[a:a + 8].strip() or 0) for a in (10, 18, 26, 34))
-    meta = _text(b[t0:t1 + 1])
+    d0, d1 = (int(head[a:a + 8].strip() or 0) for a in (26, 34))
+    meta = text_of(b)
     up = {k.upper(): v for k, v in meta.items()}
     if not d0 or not d1:                          # > 99,999,999 bytes: offsets only in TEXT
         d0, d1 = int(up.get("$BEGINDATA", 0)), int(up.get("$ENDDATA", 0))
@@ -83,13 +102,17 @@ def read(path) -> FCS:
         # flowio handles them if one turns up
         raise ValueError(f"{path.name}: $DATATYPE {dt} with $PnB {sorted(set(bits))} not read")
     tot = tot or len(a) // npar
-    a = a[: tot * npar].reshape(tot, npar).astype(np.float64)
-    if dt == "I":                                 # $PnR masks the unused high bits
-        for j, i in enumerate(range(1, npar + 1)):
-            r = float(up.get(f"$P{i}R", "0") or 0)
-            if r and r < 2 ** bits[j] and (int(r) & (int(r) - 1)) == 0:
-                a[:, j] = np.mod(a[:, j], r)
-    return FCS(path, meta, names, labels, {n: a[:, j] for j, n in enumerate(names)})
+    a = a[: tot * npar].reshape(tot, npar)
+    # float32: exact for the integers up to 2^24 an Accuri writes, half the memory of
+    # float64; one contiguous array per channel (a column view is strided, slower)
+    data = {}
+    for j, n in enumerate(names):
+        r = float(up.get(f"$P{j + 1}R", "0") or 0)
+        col = a[:, j]
+        if dt == "I" and r and r < 2 ** bits[j] and (int(r) & (int(r) - 1)) == 0:
+            col = np.mod(col, int(r))             # $PnR masks the unused high bits
+        data[n] = col.astype(np.float32)
+    return FCS(path, meta, names, labels, data)
 
 
 # what the report and the sample table show from an instrument's keywords, label: keys
@@ -113,8 +136,8 @@ FILTERS = {"BD Accuri C6 Plus": {"FL1": "533/30", "FL2": "585/40", "FL3": "670 L
 FLUORS = [["FITC", "GFP", "AF488", "Alexa Fluor 488", "CFSE"],
           ["PE", "R-PE", "PI"],
           ["PerCP", "PerCP-Cy5.5", "PE-Cy5", "7-AAD"],
-          ["APC", "AF647", "Alexa Fluor 647", "DRAQ7"],
-          ["PE-Cy7"], ["APC-Cy7"], ["BV421"], ["DAPI"]]
+          ["APC", "AF647", "Alexa Fluor 647", "DRAQ7", "SYTOX Red", "TO-PRO-3"],
+          ["PE-Cy7"], ["APC-Cy7", "eFluor 780", "Zombie NIR"], ["BV421"], ["DAPI"]]
 
 
 def fluor_of(name: str) -> str:

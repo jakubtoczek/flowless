@@ -16,10 +16,12 @@ see the [README](README.md).
 6. **Experiment.** Record what was done (or drop the procedure sheet).
 7. **Report…** and **Save** (Ctrl+S).
 
-Ctrl+Z / Ctrl+Y undo and redo each change; the log at the bottom names what happened and what
-looks wrong (✗ ⚠). Numbers are written with a decimal point whatever the system's language;
-the mouse wheel scrolls past the lists and number boxes, it never changes them. The version
-is in the window title and on every report.
+Ctrl+Z / Ctrl+Y undo and redo each change (the figure's settings too); the log at the bottom
+names what happened and what looks wrong (✗ ⚠). Numbers are written with a decimal point
+whatever the system's language; the mouse wheel scrolls past the lists and number boxes, it
+never changes them. The version is in the window title and on every report. Should something
+break inside Flowless, the log says so (*internal error*) and `flowless_errors.log`, beside
+`Flowless.bat`, keeps the details: send it along with what you were doing.
 
 ## Samples
 
@@ -49,7 +51,8 @@ plot) or a **range** on one (the histogram).
 - **The dot plot's channels** are picked above it: FSC-A × SSC-A (cells), FSC-A × FSC-H
   (singlets), the pairs the group's gates use, or *custom…* (any two channels). They stay as
   picked when the group, the samples or the population change; a gate on other channels
-  says so, with a link to show them.
+  says so, with a link to show them. Scatter channels are linear, fluorescence log —
+  **logicle** when the files hold values below 0 (below).
 - **The histogram's y axis**: count (the default), % of max, or % of events (each
   histogram's area 100 %).
 
@@ -67,6 +70,9 @@ plot) or a **range** on one (the histogram).
 - **+ Singlets** adds a *singlets (auto)* gate on FSC-A × FSC-H, first under the selected
   polygon (else the main population), so the figure and the values use it: doublets (about
   twice the area for the same height) are left out.
+- **+ Live**, with a viability dye (below): a *live (auto)* gate on the dye × SSC-A, first
+  under the selected polygon (else the main population), so the figure and the values use
+  the live cells: the dye-bright (dead) ones are left out.
 - **+ Range** starts above 99 % of the negative control's events; drag its limits.
 - **Del** deletes the selected population, **F2** renames it.
 - **This sample's own gate** (one sample picked) gives it its own version of the selected
@@ -74,6 +80,22 @@ plot) or a **range** on one (the histogram).
 - A ⚠ under the tree says when ranges hang from a population the figure doesn't show, with a
   link that shows it instead (or right-click a population: *Show … in the figure*).
 - Click a plot, **Ctrl+C** copies it.
+
+### A viability dye
+
+Nothing about viability shows until the experiment has a dye: a reagent of kind *viability
+dye* in **Experiment** (its fluorochrome tells the channel: DRAQ7, TO-PRO-3 or SYTOX Red are
+read like APC, on an Accuri's FL4; 7-AAD like PerCP, on FL3; PI like PE), or a channel the
+cytometer named for one (*DRAQ7-A*, *Live/Dead*…). Then the dot plot's list has *the dye ×
+SSC-A* and **+ Live** appears. On an Accuri, a far-red dye on FL4 (red laser) doesn't spill
+into PE on FL2, and tells whether the minor FSC × SSC cluster is dying cells.
+
+### Values below 0: logicle axes
+
+Compensated files hold values below 0 (a log axis would drop them). A channel with such
+values gets a **logicle** axis everywhere (histograms, dot plots): linear around 0, log above,
+its linear part as wide as the files' negatives need. Accuri files never hold any: their axes
+stay log. A polygon drawn on a log or logicle plot keeps its sides straight there.
 
 ### Gates in and out
 
@@ -88,7 +110,8 @@ On the left, the figure's **items**: its panels and the legend. Select the first
 whole figure's options, a panel for its own (they override the figure's; **↺** undoes that),
 the legend for its options. **+** adds a panel (a copy of the selected one), **−** or Del
 removes one. The order of the list is only an order: it doesn't place anything (the boxes do);
-for a group shown twice, the summary table follows its first panel.
+for a group shown twice, the summary table follows its first panel. The options come in
+sections: click a section's title to fold it (remembered).
 
 A panel shows one group:
 
@@ -99,17 +122,20 @@ A panel shows one group:
 
 ### Options
 
+- **Series, in order** (first; each label, in every panel): colour, dashes, fill, and
+  **▲ ▼** for its place. The order is the legend's (read across, line by line), the tables'
+  within each group, the bars', and the histograms' (the control drawn first, at the back),
+  and it sets the automatic colours and dashes (the first series solid, then dashed…). Saved
+  with the experiment; Ctrl+Z undoes a move. Labels shown under one name (▤ Aliases) are one
+  series: one style, one legend entry, one place.
 - **Style**: black & white (black lines with dashes, the control filled grey), overlaid or
   offset, the y axis, smoothed, filled, line widths (data, axes; two decimals: 0.75 can be
   typed), range gates, the value above each bar.
-- **Text**: titles, axis labels, x tick labels, y tick labels, range labels, legend. A title
-  wider than its panel goes on two lines, at its size.
-- **Series, in order** (each label, in every panel): colour, dashes, fill, and **▲ ▼** for
-  its place. The order is the legend's (read across, line by line), the tables' within each
-  group, the bars', and the histograms' (the control drawn first, at the back), and it sets
-  the automatic colours and dashes (the first series solid, then dashed…). Saved with the
-  experiment; Ctrl+Z undoes a move. Labels shown under one name (▤ Aliases) are one series:
-  one style, one legend entry, one place.
+- **Text**: the sizes of the titles, axis titles, x and y tick labels, range labels, legend;
+  the tick before a size shows or drops those texts — the titles, the x and the y axis
+  titles each, the x and the y tick labels (a panel can drop its own). What is dropped gives
+  its room to the plot; every plot stays the same size. A title wider than its panel goes on
+  two lines, at its size.
 - **style ▸ Apply**: a set at once (colour, black & white, offset, one column 85 mm, large for
   slides).
 - *Options ▸ Figure options* sets which options are listed.
@@ -117,11 +143,13 @@ A panel shows one group:
 ### The legend
 
 Select it. Its place: below, above or right of the figure, **in the grid** (a place of its own,
-dragged like a panel), **in each panel**, or none. Its columns or lines (*as many as fit*, *as
+dragged like a panel) or **in each panel**. Its columns or lines (*as many as fit*, *as
 needed*: the default), alignment across (left / centred / right, with a margin) and up / down
 (with an offset), line spacing, size. The alignment, margin and offset apply within its place:
 the grid's place, the band above or below, the column on the right, or, in each panel, the
-plot.
+plot. **Del** (on it in the list or in the boxes, or right-click ▸ *Remove*) takes the legend
+out of the figure; **+ legend** (under the list, or the dashed box under the layout) puts it
+back where it was.
 
 ### Layout
 
@@ -185,7 +213,8 @@ says what a report of this experiment holds and what is missing.
 ## Aliases
 
 **▤ Aliases…** sets what the figure, the tables and the report call the groups, labels,
-samples, channels and populations (*FL2-A :: PE-A* → *anti-His PE*). Double-click a *shown as*
+samples, channels and populations (*FL2-A :: PE-A* → *anti-His PE*). It opens on the groups;
+the list above the table picks another kind, or *everything* (last). Double-click a *shown as*
 cell to type; **Ctrl+C** copies a name, **Ctrl+V** pastes it as the selected rows' alias.
 Remembered for the next experiments with the same names (untick to keep them to this one).
 
@@ -235,6 +264,12 @@ is in `flowless_options.json` beside `Flowless.bat`.
   statistics aren't read (FlowJo recomputes them; Flowless computes its own). Ellipses,
   quadrants and Boolean gates are not read; the log names them. A workspace whose files have
   been renamed since is skipped (its event counts don't match).
+- **BD Accuri C6 workspaces** (`.ci`): the run as the instrument saved it, no export needed.
+  Its wells with events are written once as FCS files in a folder beside it
+  (`<workspace>/<the run's start>/`), named as in the Accuri software (*PC-1* → group PC,
+  label 1); wells already in (the same events) are skipped. Its polygons become the groups'
+  gates, a well's adjusted version that sample's own. Other region kinds are not read; the
+  log names them.
 - **Procedure sheets** (`.xlsx`), free-form as the lab writes them: the steps, the reagents'
   MW and stock, the secondary antibody's line, the amounts, a conditions table per cell
   line. What can't be read stays in the sheet. µ and ° lost in old sheets are put back.
@@ -245,16 +280,23 @@ standard), uses none of its software and needs no FlowJo licence.
 
 ## How the numbers are made
 
-- **Gates**: a polygon holds an event inside it (the channels' raw values); a range holds
-  low ≤ value < high. Events at the top of a channel's scale (an Accuri's FSC-A saturates for
-  big cells: up to 56 % of the events in the example runs; FSC-H never does) sit on the plot's
-  edge: a gate drawn to that edge takes them.
+- **Gates**: a polygon holds an event inside it, its sides straight on the plot it was drawn
+  on (linear: the raw values; log, logicle: on those axes); a range holds low ≤ value < high.
+  Events at the top of a channel's scale (an Accuri's FSC-A saturates for big cells: up to
+  56 % of the events in the example runs; FSC-H never does) sit on the plot's edge: a gate
+  drawn to that edge takes them; so do events below a log or logicle axis' bottom.
 - **The auto gate**: a density contour (15 % of the peak) around the size-weighted peak,
   debris cut at the FSC dip, raised to the saddle when a second cluster would merge in. A
   starting point: 11–35 % wider than hand-drawn gates on the example runs.
 - **Singlets**: the ridge A = c0 + c1·H through the densest area of each height slice (A/H
   grows with size, so one ratio would cut big singlets); a band −4σ / +3σ around it, σ from
   the singlets' side.
+- **Live**: the dye's histogram on its axis; the gate ends at the lowest point between its
+  main (dim) peak and a second (bright) one holding ≥ 3 % as much; with no second peak, 2.5
+  half-widths above the main one. A starting point, as the other auto gates.
+- **Logicle** (Parks et al. 2006): 4.5 decades, the top of the channel's scale at the top, the
+  linear part W = (4.5 − log10(top / |r|)) / 2 decades wide, r the 5th percentile of the
+  files' values below 0 (FlowJo's default is W 0.5).
 - **Geometric mean**: exp(mean(ln x)) of the positive values. Median, mean and CV of all of
   them.
 - **÷ control**: the value over the group's negative control's (else the secondary-only, else
@@ -279,7 +321,7 @@ within 0.2 %.
 | Ctrl+Z / Ctrl+Y | undo / redo |
 | Ctrl+C | copy the selected plot, table, figure or alias |
 | Ctrl+V | paste an alias (▤ Aliases) |
-| Del | delete the selected population, panel or polygon corner |
+| Del | delete the selected population, panel, legend or polygon corner |
 | F2 | rename the selected population |
 | Enter | close a polygon being drawn |
 | Esc | cancel a drag |

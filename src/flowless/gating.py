@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import copy
 import html
-import math
 from pathlib import Path
 
 import numpy as np
@@ -18,7 +17,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
                                QPushButton, QSplitter, QToolButton, QTreeWidget,
                                QTreeWidgetItem, QVBoxLayout, QWidget)
 
-from . import model, plots
+from . import model, plots, scale
 from .canvas import PlotCanvas
 
 EDIT = "#eb6834"
@@ -250,12 +249,18 @@ class RangeEditor:
             self.ax.draw_artist(art)
         self.c.blit(self.c.figure.bbox)
 
+    def _px(self, v) -> float:
+        return float(self.ax.transData.transform((v, 0))[0])
+
+    def _val(self, px) -> float:
+        return float(self.ax.transData.inverted().transform((px, 0))[0])
+
     def _press(self, e):
         if e.button != 1:
             return
         self.c.setFocus()
         a, b = self._ends()
-        pa, pb = self.ax.transData.transform((a, 0))[0], self.ax.transData.transform((b, 0))[0]
+        pa, pb = self._px(a), self._px(b)
         left, right = self.ax.bbox.x0, self.ax.bbox.x1
         if e.x > right + 2:
             self.hi = None
@@ -270,23 +275,24 @@ class RangeEditor:
         elif abs(e.x - pb) <= PICK:
             self.drag = ("hi", None)
         elif pa < e.x < pb:
-            self.drag = ("move", (e.x, a, b))
+            self.drag = ("move", (e.x, pa, pb))
 
     def _move(self, e):
+        """In pixels along the axis, so a log or a logicle one alike."""
         if self.drag is None:
             return
-        x0, x1 = self.lims
-        inv = self.ax.transData.inverted()
-        x = min(max(inv.transform((e.x, e.y))[0], x0), x1)
+        left, right = self.ax.bbox.x0, self.ax.bbox.x1
+        x = min(max(e.x, left), right)
+        pa, pb = (self._px(v) for v in self._ends())
         if self.drag[0] == "lo":
-            self.lo = None if x <= x0 * 1.001 else min(x, self._ends()[1] * 0.999)
+            self.lo = None if x <= left + 1 else self._val(min(x, pb - 1))
         elif self.drag[0] == "hi":
-            self.hi = None if x >= x1 * 0.999 else max(x, self._ends()[0] * 1.001)
+            self.hi = None if x >= right - 1 else self._val(max(x, pa + 1))
         else:
             px, a, b = self.drag[1]
-            f = 10 ** (math.log10(x) - math.log10(inv.transform((px, 0))[0]))
-            if a * f >= x0 and b * f <= x1:
-                self.lo, self.hi = a * f, b * f
+            d = e.x - px
+            if a + d >= left and b + d <= right:
+                self.lo, self.hi = self._val(a + d), self._val(b + d)
         self._blit()
 
     def _release(self, e):
@@ -424,10 +430,15 @@ class GatingTab(QWidget):
                                              "below the selected polygon (else the main "
                                              "population), first under it: doublets (twice "
                                              "the area for the height) left out",
-                               self.singlets)]:
+                               self.singlets),
+                              ("+ Live", "a 'live (auto)' polygon on the viability dye × SSC-A "
+                                         "below the selected polygon (else the main "
+                                         "population), first under it: the dye's bright "
+                                         "(dead) cells left out", self.live)]:
             b = QPushButton(text, toolTip=tip)
             b.clicked.connect(fn)
             h.addWidget(b)
+        self.live_button = b                      # shown only with a viability dye
         lv.addLayout(h)
         h = QHBoxLayout()
         b = QPushButton("Delete", toolTip="this population and those below it (Del)")
@@ -536,6 +547,7 @@ class GatingTab(QWidget):
             c.addItem(exp.name("channel", ch), ch)
         c.setCurrentIndex(max(0, c.findData(keep if keep in chans else exp.marker)))
         c.blockSignals(False)
+        self.live_button.setVisible(bool(exp.viability_channel()))
         self._set_group(cur)
 
     def _picked(self):
@@ -575,7 +587,8 @@ class GatingTab(QWidget):
     def _fill_axes(self):
         exp = self.win.exp
         have = set(exp.all_channels())
-        pairs = [p for p in self.PRESETS if set(p) <= have]
+        dye = exp.viability_channel()
+        pairs = [p for p in self.PRESETS + ([(dye, "SSC-A")] if dye else []) if set(p) <= have]
         pairs += [(g.x, g.y) for g in self.gates() if g.kind == "polygon" and
                   (g.x, g.y) not in pairs and {g.x, g.y} <= have]
         a = self.axes
@@ -814,10 +827,21 @@ class GatingTab(QWidget):
 
     # -- drawing
     def _lims(self, x, y):
-        ss = self.samples()
-        rx = max((s.fcs.range(x) for s in ss if x in s.fcs.data), default=0) or 1e7
-        ry = max((s.fcs.range(y) for s in ss if y in s.fcs.data), default=0) or 1e7
-        return -0.005 * rx, rx, -0.005 * ry, ry
+        """Where a corner can go: the plot, and a little below its bottom (the events piled
+        there are then in)."""
+        out = []
+        for ch in (x, y):
+            r = max((s.fcs.range(ch) for s in self.samples() if ch in s.fcs.data),
+                    default=0) or 1e7
+            k = self.win.exp.scale(ch, dot=True)
+            out += [float(scale.inverse(k, -0.005 * scale.span(k, r), r)), r]
+        return tuple(out)
+
+    def _scales(self, x, y) -> dict:
+        """The dot plot's scales on x × y: a polygon drawn there keeps its sides straight
+        on them."""
+        exp = self.win.exp
+        return {"xs": exp.scale(x, dot=True), "ys": exp.scale(y, dot=True)}
 
     def draw(self, sel=None):
         exp = self.win.exp
@@ -835,7 +859,8 @@ class GatingTab(QWidget):
         ss = self.samples()
         one = self.one()
         x, y = self.xy
-        o = {**plots.options(exp), "legend": "panel", "layout": "overlay", "title_pt": 9,
+        o = {**plots.options(exp), **plots.ALL_TEXT, "legend": "panel", "layout": "overlay",
+             "title_pt": 9,
              "label_pt": 8.5, "xtick_pt": 7.5, "ytick_pt": 7.5, "legend_pt": 7.5, "gate_pt": 7.5,
              "fill": False, "legend_h": "left", "legend_v": "top", "legend_dx": 2.0,
              "legend_dy": 1.0, "legend_rows": 0, "legend_cols": 1, "legend_space": 0.5,
@@ -876,9 +901,8 @@ class GatingTab(QWidget):
         styles = plots.series_style(exp, o)
         plots.hist_axes(self.ax2, exp, panel, {**o, "gates": True}, styles, only=ss)
         if g is not None and g.kind == "range" and g.x == ch:
-            top = max((s.fcs.range(ch) for s in ss if ch in s.fcs.data), default=0) or 1e7
-            self.editor = RangeEditor(self.hist, self.ax2, shown.lo, shown.hi, (1.0, top),
-                                      self._span_done)
+            self.editor = RangeEditor(self.hist, self.ax2, shown.lo, shown.hi,
+                                      self.ax2.get_xlim(), self._span_done)
             self.help.setText(f"{g.name}: drag its limits, or between them to move both; a "
                               "click beyond the plot's right edge opens it to the top.")
         self.dot.draw_idle()
@@ -897,6 +921,8 @@ class GatingTab(QWidget):
         sel = self.editor.sel if self.editor else None
         self.win.snap()
         t.vertices = v
+        for k, val in self._scales(*self.xy).items():    # its sides: straight as edited
+            setattr(t, k, val)
         self.win.changed(redraw_gating=False)
         self.fill_tree()
         self.draw(sel=sel)
@@ -938,7 +964,7 @@ class GatingTab(QWidget):
         self.win.snap()
         t = self._target()
         if g is not None and g.kind == "polygon":
-            t.vertices = v
+            t.vertices, t.xs, t.ys = v, "", ""         # a contour of the values themselves
         else:
             self.pop = model.add_cells_gate(self.win.exp, self.group, x, y, v)
         self.win.changed()
@@ -954,7 +980,8 @@ class GatingTab(QWidget):
         if self.editor is not None:
             self.editor.disconnect()
         exp = self.win.exp
-        o = {**plots.options(exp), "label_pt": 8.5, "xtick_pt": 7.5, "ytick_pt": 7.5}
+        o = {**plots.options(exp), **plots.ALL_TEXT, "label_pt": 8.5, "xtick_pt": 7.5,
+             "ytick_pt": 7.5}
         plots.dot_axes(self.ax1, exp, self.samples(), x, y, parent, [], o)
         self.help.setText(f"Drawing '{name}' below {parent or model.ALL}: click its corners "
                           "(outside the plot: on its edge), then the first one again, a "
@@ -966,7 +993,8 @@ class GatingTab(QWidget):
                 return
             self.win.snap()
             self.gates().append(model.Gate(name, parent, "polygon", x, y,
-                                           [list(map(float, v)) for v in verts]))
+                                           [list(map(float, v)) for v in verts],
+                                           **self._scales(x, y)))
             self.pop = name
             self.win.changed()
 
@@ -1030,6 +1058,37 @@ class GatingTab(QWidget):
                                          "edge" if sat > 5 else ""))
         self.win.changed()
         self.set_xy(("FSC-A", "FSC-H"))              # the new gate's axes: show it
+
+    def live(self):
+        """A 'live (auto)' rectangle on the viability dye × SSC-A, first below the selected
+        polygon (else the main population): the population the figure measures then."""
+        exp = self.win.exp
+        dye = exp.viability_channel()
+        if not self.group or not dye:
+            return
+        g = self.gate()
+        parent = g.name if g is not None and g.kind == "polygon" else \
+            exp.main_population(self.group)
+        parent = "" if parent == model.ALL else parent
+        ss = [s for s in exp.in_group(self.group) if dye in s.fcs.data and "SSC-A" in s.fcs.data]
+        kind = exp.scale(dye, dot=True)
+        v, pct = model.live_gate(ss, [exp.masks(s)[parent or model.ALL] for s in ss], dye, kind)
+        if not v:
+            self.win.log("✗ live: too few events")
+            return
+        names = {x.name for x in self.gates()}
+        name = next(n for n in [model.LIVE] + [f"{model.LIVE} {i}" for i in range(2, 99)]
+                    if n not in names)
+        self.win.snap()
+        gs = self.gates()
+        at = next((i + 1 for i, x in enumerate(gs) if x.name == parent), 0)
+        gs.insert(at, model.Gate(name, parent, "polygon", dye, "SSC-A", v, xs=kind))
+        self.pop = name
+        self.win.log(f"✓ {self.group} › {parent or model.ALL} › {name}: {pct:.1f} % of the "
+                     f"events (dim on {exp.name('channel', dye)}, up to the dip before the "
+                     "bright ones) — check it on the dye × SSC-A")
+        self.win.changed()
+        self.set_xy((dye, "SSC-A"))
 
     def delete(self):
         g = self.gate()

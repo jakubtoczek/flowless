@@ -144,7 +144,8 @@ def main(argv) -> int:
     assert g.ny.currentData() == "count" and g.ax2.get_ylabel() == "Count", g.ax2.get_ylabel()
     g.ny.setCurrentIndex(g.ny.findData("area"))
     assert g.ax2.get_ylabel().startswith("% of events"), g.ax2.get_ylabel()
-    ys = [ln.get_ydata() for ln in g.ax2.get_lines() if len(ln.get_ydata()) > 50]
+    ys = [ln.get_ydata() for ln in g.ax2.get_lines()
+          if len(ln.get_ydata()) > 50 and ln.get_linestyle() != "None"]   # not the minor ticks
     assert ys and all(abs(sum(y) - 100) < 0.5 for y in ys), [sum(y) for y in ys]
     g.ny.setCurrentIndex(g.ny.findData("count"))
     # the wheel over a list leaves it as it is
@@ -341,6 +342,51 @@ def main(argv) -> int:
     f._set("axis_lw", 1.5, None)
     f.render()
     assert any(abs(sp.get_linewidth() - 1.5) < 1e-6 for ax in f.fig.axes for sp in ax.spines.values())
+    # figure settings in undo; titles, axis titles, tick labels each shown or not (the plots
+    # taller without titles: their room goes to the plot)
+    f._snap_key = (None, 0.0)
+    f._set("lw", 2.5, None)
+    w.do_undo()
+    f = w.figure_tab
+    assert plots.options(w.exp)["lw"] != 2.5, "a figure option undone"
+    h0 = plots.figure(w.exp).axes[0].get_position().height
+    for k in ("show_title", "show_xticks", "show_ylabel"):
+        f._snap_key = (None, 0.0)
+        f._set(k, False, None)
+    fig = plots.figure(w.exp)
+    fig.canvas.draw()
+    assert not any(ax.get_title() for ax in fig.axes) and fig.axes[0].get_position().height > h0
+    assert not any(t.get_visible() and t.get_text() for ax in fig.axes
+                   for t in ax.get_xticklabels()), "x tick labels off"
+    assert all(not ax.get_ylabel() for ax in fig.axes) and any(ax.get_xlabel() for ax in fig.axes)
+    for _ in range(3):
+        w.do_undo()
+    f = w.figure_tab
+    assert plots.options(w.exp)["show_title"] and plots.options(w.exp)["show_xticks"]
+    # the options: Series, in order first on the whole figure; sections fold, remembered
+    from flowless.figtab import Fold
+    f.items.setCurrentRow(0)
+    folds = [x for x in (f.opt_layout.itemAt(i).widget() for i in range(f.opt_layout.count()))
+             if isinstance(x, Fold)]
+    assert folds[0].btn.text() == "Series, in order", [x.btn.text() for x in folds]
+    style = next(x for x in folds if x.btn.text() == "Style")
+    style.btn.click()
+    assert "Style" in w.opts["folded"] and not style.body.isVisibleTo(style)
+    f.build_options()
+    style = next(x for x in (f.opt_layout.itemAt(i).widget() for i in range(f.opt_layout.count()))
+                 if isinstance(x, Fold) and x.btn.text() == "Style")
+    assert not style.btn.isChecked(), "folded again once rebuilt"
+    style.btn.click()
+    # the legend: Del removes it, + legend puts it back where it was
+    li = next(i for i, q in enumerate(f.panels()) if q.get("kind") == "legend")
+    place = plots.options(w.exp)["legend"]
+    f.items.setCurrentRow(li + 1)
+    f.remove()
+    assert plots.options(w.exp)["legend"] == "none" and f.items.isRowHidden(li + 1)
+    assert not plots.figure(w.exp).legends and not f.legend_back.isHidden()
+    f._legend_on()
+    assert plots.options(w.exp)["legend"] == place and not f.items.isRowHidden(li + 1)
+    assert f.legend_back.isHidden()
     # the layout, with the mouse: + adds a panel (3 + 1), one dragged down makes 2 × 2 and
     # nothing else moves; over another box: not taken; half a panel down; too wide: red, not
     # drawn; the legend into the grid, then above the figure; the list's order moves nothing
@@ -499,7 +545,6 @@ def main(argv) -> int:
     shot("3_figure_panels")
     # the legend's handle: a quarter of a panel high, then back to its entries' size
     hd = f.schema._handle().center().toPoint()
-    top_left = f.schema._boxes()[li].topLeft().toPoint()
     to = f.schema._px(*f.schema._q(0, 0, lw, 1)).bottomRight().toPoint()
     QTest.mousePress(f.schema, Qt.LeftButton, Qt.NoModifier, hd)
     QTest.mouseMove(f.schema, to)
@@ -687,6 +732,7 @@ def main(argv) -> int:
         od.grab().save(str(shots / "7_options.png"))
     od.close()
     ad = qapp.AliasDialog(w)                   # Ctrl+C a name, Ctrl+V as two rows' alias
+    assert ad.kind.currentData() == "group" and ad.kind.itemData(ad.kind.count() - 1) == "",         "the groups first, everything last"
     ad.table.setCurrentCell(1, 1)
     ad._copy()
     from PySide6.QtWidgets import QTableWidgetSelectionRange
@@ -707,6 +753,51 @@ def main(argv) -> int:
     e2, problems = model.Experiment.open(out / "exp.json")
     assert not problems and len(e2.samples) == len(w.exp.samples), problems
     assert e2.results() == w.exp.results() and e2.aliases == w.exp.aliases
+    # the artificial experiment: compensated values (logicle axes), a viability dye named
+    # in its channel; the live gate first under the cells, the figure measuring it
+    sys.path.insert(0, str(ROOT / "misc"))
+    import make_artificial
+    art = out / "artificial"
+    make_artificial.main(art)
+    w.dirty = False
+    w.open_paths([art / "compensated.json"])
+    assert w.exp.scale("PE-A").startswith("logicle") and w.exp.scale("FSC-A", dot=True) == ""
+    w.tabs.setCurrentIndex(1)
+    g = w.gating_tab
+    assert not g.live_button.isHidden() and w.exp.viability_channel() == "APC-A"
+    g.live()
+    lg = next(x for x in w.exp.gates[g.group] if x.name == model.LIVE)
+    assert lg.xs.startswith("logicle") and w.exp.main_population(g.group) == model.LIVE
+    pct = [r["% parent"] for r in w.exp.results() if r["population"] == model.LIVE]
+    assert all(85 < x < 97 for x in pct), pct
+    assert g.ax1.get_xscale() == "function" and g.ax2.get_xscale() == "function"
+    g.dot.draw()
+    shot("8_live_logicle")
+    fig = plots.figure(w.exp)
+    assert any(ax.get_xscale() == "function" for ax in fig.axes), "a logicle histogram"
+    # no dye recorded and none in a channel's name: nothing about viability shows
+    w.dirty = False
+    w.exp = model.Experiment()
+    w.open_paths([art / "accuri-like"])
+    assert not w.exp.viability_channel() and w.exp.scale("FL2-A") == "log"
+    w.tabs.setCurrentIndex(1)
+    assert w.gating_tab.live_button.isHidden()
+    # an Accuri workspace (.ci): its wells written beside it, named as in the instrument,
+    # its polygon as the groups' gate
+    import shutil
+    ci = out / "ci" / "TheraSen_260527.ci"
+    ci.parent.mkdir()
+    shutil.copy(data / ci.name, ci)
+    w.dirty = False
+    w.exp = model.Experiment()
+    w.open_paths([ci])
+    assert {"PC", "h"} <= set(w.exp.groups()), w.exp.groups()
+    assert all(s.path.startswith(str(out)) for s in w.exp.samples)
+    gate = w.exp.gates["h"][0]
+    assert (gate.name, gate.x, gate.y, len(gate.vertices)) == ("MDA-MB-157-PC", "FSC-H", "SSC-H", 13)
+    n = len(w.exp.samples)
+    w.open_paths([ci])                                  # the same wells: not twice
+    assert len(w.exp.samples) == n
     w.dirty = False
     w.close()
     print(f"smoke test OK — outputs in {out}")

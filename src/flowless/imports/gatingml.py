@@ -91,8 +91,8 @@ def read(path) -> tuple[list[dict], list[str]]:
         names[gid] = name
         g = shape(e) if _plain(e) else None
         if g is None:
-            skipped.append(f"{name} ({_tag(e)}{'' if _plain(e) else ', on a transformed or '
-                                                 'compensated scale'})")
+            why = "" if _plain(e) else ", on a transformed or compensated scale"
+            skipped.append(f"{name} ({_tag(e)}{why})")
             continue
         gates.append({"id": gid, "name": name, "parent_id": e.get(f"{GATING}parent_id", ""),
                       "group": info.get("group", "") if info is not None else "", **g})

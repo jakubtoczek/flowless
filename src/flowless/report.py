@@ -153,9 +153,18 @@ def _png(fig, dpi=200) -> bytes:
     return b.getvalue()
 
 
-def build(exp: model.Experiment, sections=None, full_table: bool = False) -> tuple[str, dict]:
-    """(html, {image name: png bytes})."""
+def build(exp: model.Experiment, sections=None, full_table: bool = False,
+          cache: dict | None = None) -> tuple[str, dict]:
+    """(html, {image name: png bytes}). *cache*: images already drawn, by name (the Report
+    window's: the experiment can't change while it is open; a redraw took a second)."""
     from matplotlib.figure import Figure
+
+    cache = {} if cache is None else cache
+
+    def image(name, draw):
+        if name not in cache:
+            cache[name] = draw()
+        images[name] = cache[name]
 
     sections = sections or [k for k, _ in SECTIONS]
     rec = record.clean(exp.record)
@@ -182,8 +191,8 @@ def build(exp: model.Experiment, sections=None, full_table: bool = False) -> tup
                 parts.append(table(["", ""], items, "kv"))
             parts.append(table(["group"] + record.GROUP_FIELDS, grp))
         elif key == "figure":
-            fig = plots.figure(exp, style={"background": "white"})
-            images["figure.png"] = _png(fig, 250)
+            image("figure.png", lambda: _png(plots.figure(exp, style={"background": "white"}),
+                                             250))
             w = int(plots.figure(exp, draw=False)[0] * 3.78)
             parts.append(f'<h2>{name}</h2><p><img src="figure.png" width="{min(w, 718)}"></p>'
                          f'<p class="note">{html.escape(_figure_legend(exp))}</p>')
@@ -270,13 +279,16 @@ def build(exp: model.Experiment, sections=None, full_table: bool = False) -> tup
                 polys = [x for x in gates if x.kind == "polygon"]
                 parts.append(f"<h3>{html.escape(exp.title(grp))}</h3>")
                 if polys:
-                    fig = Figure(figsize=(2.6 * len(polys), 2.6))
-                    for ax, x in zip(fig.subplots(1, len(polys), squeeze=False)[0], polys):
-                        plots.dot_axes(ax, exp, exp.in_group(grp), x.x, x.y, x.parent, [x],
-                                       {"label_pt": 7, "xtick_pt": 6, "ytick_pt": 6,
-                                        "gate_pt": 6.5})
-                    fig.tight_layout()
-                    images[f"gate{k}.png"] = _png(fig, 150)
+                    def draw(grp=grp, polys=polys):
+                        fig = Figure(figsize=(2.6 * len(polys), 2.6))
+                        for ax, x in zip(fig.subplots(1, len(polys), squeeze=False)[0], polys):
+                            plots.dot_axes(ax, exp, exp.in_group(grp), x.x, x.y, x.parent, [x],
+                                           {"label_pt": 7, "xtick_pt": 6, "ytick_pt": 6,
+                                            "gate_pt": 6.5})
+                        fig.tight_layout()
+                        return _png(fig, 150)
+
+                    image(f"gate{k}.png", draw)
                     parts.append(f'<p><img src="gate{k}.png" width="{int(250 * len(polys))}">'
                                  "</p>")
                 parts.append(table(["population", "parent", "gate", "own version in"], desc))
@@ -389,24 +401,6 @@ def save_xlsx(exp: model.Experiment, path, sections=None) -> None:
                                      "÷ control SD", "each run"],
                       [[r["group"], r["label"], r["population"], r["n"], r["mean"], r["sd"],
                         r["ratio mean"], r["ratio sd"], r["runs"]] for r in rr])
-        elif key == "replicates":
-            rr = replicate_rows(exp, summary_rows(exp, rows))
-            parts.append(f"<h2>{name}</h2>")
-            if rr:
-                parts.append(table(["group", "label", "population", "runs",
-                                    f"{exp.stat} (mean ± SD)", "÷ control (mean ± SD)",
-                                    "each run"],
-                                   [[r["group"], r["label"], r["population"],
-                                     r["n"], f"{num(r['mean'])} ± {num(r['sd'])}",
-                                     f"{num(r['ratio mean'], 2)} ± {num(r['ratio sd'], 2)}",
-                                     r["runs"]] for r in rr], "small"))
-                parts.append('<p class="note">Groups shown under one name (▤) are runs of '
-                             "one condition. SD over the runs (n − 1); ÷ control: each run "
-                             "over its own control.</p>")
-            else:
-                parts.append('<p class="note">No two groups are shown under one name: give '
-                             "two runs of a condition the same name (▤ Aliases) to pool "
-                             "them.</p>")
         elif key == "samples":
             extra = list(dict.fromkeys(k for s in exp.samples for k in s.fields))
             sheet("Samples", ["group", "label", "role", "plot", "file", "well", "date", "start",
@@ -533,11 +527,11 @@ def where(ext: str, key: str) -> str:
     return "sheet" if ext == ".xlsx" else ""
 
 
-def pptx_parts(exp, sections, full_table=False) -> tuple[str, dict, str]:
+def pptx_parts(exp, sections, full_table=False, cache=None) -> tuple[str, dict, str]:
     """(the slide's html, its images, the notes as text): the preview of the slide."""
     on = [k for k in sections if k in SLIDE]
-    text, images = build(exp, on, full_table)
-    notes, _ = build(exp, [k for k in sections if k not in SLIDE])
+    text, images = build(exp, on, full_table, cache)
+    notes, _ = build(exp, [k for k in sections if k not in SLIDE], cache=cache)
     return text, images, as_text(notes)
 
 
@@ -559,7 +553,8 @@ def _lay(heads, body, width: float, pt: float) -> tuple[list[float], list[float]
         need[c] = max(width - (sum(need) - need[c]), 2.0)
         if sum(need) > width:
             need = [max(t, 1.2) for t in text]
-            need = [w * width / sum(need) for w in need] if sum(need) > width else                 [w + (width - sum(need)) / len(need) for w in need]
+            need = ([w * width / sum(need) for w in need] if sum(need) > width else
+                    [w + (width - sum(need)) / len(need) for w in need])
     else:
         need = [w + (width - sum(need)) / len(need) for w in need]
     line = pt * 0.0353 * 1.2

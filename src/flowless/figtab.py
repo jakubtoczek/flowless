@@ -14,9 +14,9 @@ from pathlib import Path
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QKeySequence, QPainter, QPen
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QColorDialog, QComboBox,
-                               QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout,
-                               QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-                               QListWidgetItem, QMenu, QPushButton, QScrollArea, QSlider,
+                               QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QGridLayout,
+                               QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
+                               QMenu, QPushButton, QScrollArea, QSizePolicy, QSlider,
                                QSpinBox, QSplitter, QToolButton, QVBoxLayout, QWidget)
 
 from . import plots
@@ -42,6 +42,49 @@ class Num(QDoubleSpinBox):
         return t[:-1] if t.endswith("0") else t
 
 
+class Fold(QWidget):
+    """A section of options that folds: its title a button (▾ open, ▸ folded); *folded*,
+    the set of the folded sections' names, is kept up to date (the options remember it)."""
+
+    def __init__(self, title: str, name: str, folded: set, on_toggle):
+        super().__init__()
+        self.btn = QToolButton(text=title, checkable=True, checked=name not in folded,
+                               toolButtonStyle=Qt.ToolButtonTextBesideIcon)
+        self.btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.btn.setStyleSheet("QToolButton { border: none; font-weight: 600; "
+                               "text-align: left; padding: 3px 0 }")
+        self.body = QFrame(frameShape=QFrame.StyledPanel)
+        self.form = QFormLayout(self.body)
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 0, 0, 2)
+        v.setSpacing(0)
+        v.addWidget(self.btn)
+        v.addWidget(self.body)
+
+        def toggle(on):
+            (folded.discard if on else folded.add)(name)
+            self._show(on)
+            on_toggle()
+
+        self.btn.toggled.connect(toggle)
+        self._show(self.btn.isChecked())
+
+    def _show(self, on):
+        self.btn.setArrowType(Qt.DownArrow if on else Qt.RightArrow)
+        self.body.setVisible(on)
+
+
+def clear(layout) -> None:
+    """Every widget out of *layout*, deleted once the event that led here is over: hide +
+    deleteLater, not setParent(None) - that hands the widget to Python, which deleted it at
+    once, under the very combo box whose signal was rebuilding them (a crash)."""
+    while layout.count():
+        w = layout.takeAt(0).widget()
+        if w is not None:
+            w.hide()
+            w.deleteLater()
+
+
 class Schematic(QWidget):
     """The figure's layout as boxes, in its proportions (from the render, so they can't
     disagree with it). Click a box to select it (elsewhere: the whole figure), right-click
@@ -55,6 +98,7 @@ class Schematic(QWidget):
     #                                      it was; a place outside the grid: x, y unused)
     sized = Signal(int, int, int)        # the legend, its width, height (quarters)
     add = Signal()
+    legend_back = Signal()               # a click on the removed legend's '+ legend'
     menu = Signal(int, object)           # item, global position
     M = 26                               # px around the figure: the legend's drop zones
 
@@ -155,6 +199,8 @@ class Schematic(QWidget):
         hit = next((i for i, r in self._boxes().items() if r.contains(pos)), None)
         if hit is None and self._px(*self._ghost()).adjusted(4, 4, -4, -4).contains(pos):
             return "add"
+        if hit == self.legend_i and self.place == "none":
+            return "legend+"
         return hit
 
     # -- where a drag goes
@@ -224,9 +270,11 @@ class Schematic(QWidget):
         p.setFont(font)
         for i, r in boxes.items():
             leg, on = i == self.legend_i, i == self.sel
+            off = leg and self.place == "none"          # removed: '+ legend', dashed
             p.setOpacity(0.35 if self.drag and self.drag[0] == i else 1.0)
-            p.setBrush(QColor("#2f3d38" if leg else "#3d3d3d"))
-            p.setPen(QPen(FOCUS if on else QColor(ACCENT if leg else "#6a6a6a"), 2 if on else 1))
+            p.setBrush(Qt.NoBrush if off else QColor("#2f3d38" if leg else "#3d3d3d"))
+            p.setPen(QPen(FOCUS if on else QColor(ACCENT if leg else "#6a6a6a"), 2 if on else 1,
+                          Qt.DashLine if off else Qt.SolidLine))
             p.drawRoundedRect(r, 4, 4)
             p.setPen(QColor("#e0e0e0"))
             text = self.texts.get(i, "")
@@ -295,6 +343,8 @@ class Schematic(QWidget):
             return
         if hit == "add":
             return self.add.emit()
+        if hit == "legend+":
+            return self.legend_back.emit()
         if hit == "size":
             self.sizing = e.position()
             return
@@ -342,6 +392,7 @@ class FigureTab(QWidget):
         super().__init__()
         self.win = win
         self.sel = -1                              # -1: the figure; else an index in panels()
+        self.folded = set(win.opts.get("folded") or [])     # the option sections folded
         self._snap_key = (None, 0.0)
         self.fig = None
         self.timer = QTimer(singleShot=True, interval=120, timeout=self.render)
@@ -370,6 +421,9 @@ class FigureTab(QWidget):
             b.setFixedWidth(36)
             b.clicked.connect(fn)
             bar.addWidget(b)
+        self.legend_back = QPushButton("+ legend", toolTip="the legend back where it was")
+        self.legend_back.clicked.connect(self._legend_on)
+        bar.addWidget(self.legend_back)
         bar.addStretch()
         self.opt_box = QWidget()
         self.opt_layout = QVBoxLayout(self.opt_box)
@@ -450,6 +504,7 @@ class FigureTab(QWidget):
         self.schema.placed.connect(self._place)
         self.schema.sized.connect(self._legend_size)
         self.schema.add.connect(lambda: self.add(end=True))
+        self.schema.legend_back.connect(self._legend_on)
         self.schema.menu.connect(self._schema_menu)
         self.schema.addAction(QAction(self.schema, shortcut=QKeySequence.Delete,
                                       triggered=self.remove, shortcutContext=Qt.WidgetShortcut))
@@ -489,6 +544,11 @@ class FigureTab(QWidget):
         f["panels"] = self.panels()
         return f["panels"]
 
+    def _undo_point(self):
+        """An undo point of its own (a drop, the legend out or back)."""
+        self.win.snap()
+        self._snap_key = (None, 0.0)
+
     def _snap(self, key):
         """Undo point, one per run of edits of the same option."""
         k, t = self._snap_key
@@ -511,6 +571,12 @@ class FigureTab(QWidget):
         self.items.addItem(first)
         for p in items:
             self.items.addItem(QListWidgetItem(self._describe(p)))
+        off = plots.options(self.win.exp)["legend"] == "none"
+        li = next(i for i, p in enumerate(items) if p.get("kind") == "legend")
+        self.items.setRowHidden(li + 1, off)               # removed: + legend brings it back
+        self.legend_back.setVisible(off)
+        if off and self.sel == li:
+            self.sel = -1
         self.items.setCurrentRow(self.sel + 1)
         self.items.blockSignals(False)
         self.build_options()
@@ -522,11 +588,15 @@ class FigureTab(QWidget):
         if p.get("kind") == "legend":
             return f"▤  Legend — {dict((v, k) for k, v in plots.SPEC['legend']['choices'])[plots.options(exp)['legend']]}"
         kind = dict(plots.KINDS).get(p.get("kind"), p.get("kind"))
-        ch = p.get("x") or (exp.marker if p.get("kind") != "dot" else "FSC-A")
-        what = exp.name("channel", ch) + (f" × {exp.name('channel', p.get('y') or 'SSC-A')}"
-                                          if p.get("kind") == "dot" else "")
         mark = " •" if p.get("opts") else ""
-        return f"{kind} · {exp.title(p.get('group', ''))} · {what}{mark}"
+        return f"{kind} · {exp.title(p.get('group', ''))} · {self._what(p)}{mark}"
+
+    def _what(self, p) -> str:
+        """The channels a panel shows: 'FL2-A :: PE-A', a dot plot's 'x × y'."""
+        exp = self.win.exp
+        dot = p.get("kind") == "dot"
+        what = exp.name("channel", p.get("x") or ("FSC-A" if dot else exp.marker))
+        return what + (f" × {exp.name('channel', p.get('y') or 'SSC-A')}" if dot else "")
 
     def _selected(self, row):
         self.sel = row - 1
@@ -546,8 +616,7 @@ class FigureTab(QWidget):
     def _place(self, i, x, y, place):
         """A box dropped: item *i* at (x, y) quarters, its own shift back to none, the
         others where they are; the legend out of the grid to *place*."""
-        self.win.snap()                                   # each drop its own undo
-        self._snap_key = (None, 0.0)
+        self._undo_point()                                # each drop its own undo
         opts = self.fig_dict().setdefault("options", {})
         if place and place != "grid":
             opts["legend"] = place
@@ -569,8 +638,7 @@ class FigureTab(QWidget):
     def _legend_size(self, i, w, h):
         """The legend's place sized by its handle: w × h quarters (None: as its entries
         need)."""
-        self.win.snap()
-        self._snap_key = (None, 0.0)
+        self._undo_point()
         self._pin()
         own = self._own_panels()
         if w is None:
@@ -595,6 +663,8 @@ class FigureTab(QWidget):
                 m.addSeparator()
                 m.addAction("Size: as its entries need").triggered.connect(
                     lambda: self._legend_size(i, None, None))
+            m.addSeparator()
+            m.addAction("Remove (Del)").triggered.connect(self._legend_off)
         else:
             m.addAction("Add a copy").triggered.connect(self.add)
             m.addAction("Remove (Del)").triggered.connect(self.remove)
@@ -602,11 +672,7 @@ class FigureTab(QWidget):
 
     def build_bar(self):
         """The layout's options over the boxes: panel size, width, columns, legend."""
-        while self.bar.count():
-            w = self.bar.takeAt(0).widget()
-            if w is not None:
-                w.setParent(None)
-                w.deleteLater()
+        clear(self.bar)
         for r, c, label, key in ((0, 0, "", "size_of"), (0, 1, "", "panel_w"),
                                  (0, 2, "×", "panel_h"), (0, 4, "columns", "cols"),
                                  (1, 0, "width ≤", "max_w"), (1, 2, "legend", "legend")):
@@ -622,12 +688,9 @@ class FigureTab(QWidget):
     def _box_text(self, p) -> str:
         exp = self.win.exp
         if p.get("kind") == "legend":
-            return "Legend"
-        ch = p.get("x") or (exp.marker if p.get("kind") != "dot" else "FSC-A")
-        what = exp.name("channel", ch) + (f" × {exp.name('channel', p.get('y') or 'SSC-A')}"
-                                          if p.get("kind") == "dot" else "")
+            return "+ legend" if plots.options(exp)["legend"] == "none" else "Legend"
         return (f"{dict(plots.KINDS).get(p.get('kind'), p.get('kind'))}\n"
-                f"{p.get('title') or exp.title(p.get('group', ''))}\n{what}")
+                f"{p.get('title') or exp.title(p.get('group', ''))}\n{self._what(p)}")
 
     def _res(self, v):
         self.res_label.setText(f"{v / 10:.1f}×")
@@ -676,48 +739,71 @@ class FigureTab(QWidget):
         self.view.select(cells.get(self.sel))
 
     # -- the options
+    def _fold(self, title: str, name: str = "") -> QFormLayout:
+        """A folding section added to the options; its form."""
+        f = Fold(title, name or title, self.folded, self._folded)
+        self.opt_layout.addWidget(f)
+        return f.form
+
+    def _folded(self):
+        self.win.opts["folded"] = sorted(self.folded)
+        self.win.save_options()
+
     def build_options(self):
-        lay = self.opt_layout
-        while lay.count():
-            w = lay.takeAt(0).widget()
-            if w is not None:
-                w.setParent(None)                  # off screen now, not at the next loop
-                w.deleteLater()
-        exp = self.win.exp
+        clear(self.opt_layout)
         items = self.panels()
         p = items[self.sel] if 0 <= self.sel < len(items) else None
         visible = set(self.win.opts.get("figure_options") or
                       [o["key"] for o in plots.OPTIONS if o["shown"]])
         if p is not None and p.get("kind") == "legend":
-            box = QGroupBox("Legend")
-            f = QFormLayout(box)
+            f = self._fold("Legend")
             for key in plots.LEGEND_KEYS:
                 f.addRow(plots.SPEC[key]["label"], self._widget(key, None))
-            lay.addWidget(box)
-            lay.addStretch()
+            self.opt_layout.addStretch()
             guard_wheel(self.opt_box)
             return
-        if p is not None:
-            lay.addWidget(self._panel_box(p))
+        if p is None:
+            self._series_rows(self._fold("Series, in order"))
+        else:
+            self._panel_rows(self._fold("Panel"), p)
         sections = {}
         for spec in plots.OPTIONS:
-            if spec["key"] not in visible or spec["bar"] or \
+            if spec["key"] not in visible or spec["bar"] or spec["paired"] or \
                     spec["key"] in plots.LEGEND_KEYS[2:] or \
                     (p is not None and spec["scope"] != "both"):
                 continue
             if spec["section"] not in sections:
-                box = QGroupBox(spec["section"] + ("" if p is None else " — this panel"))
-                sections[spec["section"]] = QFormLayout(box)
-                lay.addWidget(box)
+                sections[spec["section"]] = self._fold(
+                    spec["section"] + ("" if p is None else " — this panel"), spec["section"])
+            keys = [spec["key"]] + spec.get("show", [])
             label = QLabel(spec["label"])
-            if p is not None and spec["key"] in p.get("opts", {}):
+            if p is not None and set(keys) & set(p.get("opts", {})):
                 label.setText(f"<b>{spec['label']}</b>")
                 label.setToolTip("this panel's own: ↺ for the figure's")
-            sections[spec["section"]].addRow(label, self._widget(spec["key"], p))
-        if p is None:
-            lay.addWidget(self._series_box())
-        lay.addStretch()
+            sections[spec["section"]].addRow(label, self._row(spec, p))
+        self.opt_layout.addStretch()
         guard_wheel(self.opt_box)
+
+    def _row(self, spec, p) -> QWidget:
+        """An option's widget; with its ticks before it when it has some (`show`: titles,
+        axis titles, tick labels shown or not - the size greyed while none is)."""
+        w = self._widget(spec["key"], p)
+        if not spec.get("show"):
+            return w
+        checks = []
+        for k in spec["show"]:
+            c = self._widget(k, p)
+            c.setText(plots.SPEC[k]["label"])
+            checks.append(c)
+        holder = QWidget()
+        row = QHBoxLayout(holder)
+        row.setContentsMargins(0, 0, 0, 0)
+        for c in checks:
+            row.addWidget(c)
+            c.toggled.connect(lambda _: w.setEnabled(any(x.isChecked() for x in checks)))
+        row.addWidget(w, 1)
+        w.setEnabled(any(x.isChecked() for x in checks))
+        return holder
 
     def _value(self, key, p):
         o = plots.options(self.win.exp)
@@ -783,10 +869,8 @@ class FigureTab(QWidget):
                 it.setText(self._describe(own[i]))
         self._changed()
 
-    def _panel_box(self, p) -> QGroupBox:
+    def _panel_rows(self, f: QFormLayout, p) -> None:
         exp = self.win.exp
-        box = QGroupBox("Panel")
-        f = QFormLayout(box)
         kind = QComboBox()
         for v, label in plots.KINDS:
             kind.addItem(label, v)
@@ -863,7 +947,6 @@ class FigureTab(QWidget):
             n.valueChanged.connect(lambda v, k=k: self._shift(k, v))
             row.addWidget(n)
         f.addRow("shift", row)
-        return box
 
     def _shift(self, k, v):
         own = self._own_panels()
@@ -893,12 +976,13 @@ class FigureTab(QWidget):
             self.build_options()
         self._changed()
 
-    def _series_box(self) -> QGroupBox:
+    def _series_rows(self, f: QFormLayout) -> None:
+        """Each label, in every panel; labels shown under one name (▤) are one series;
+        ▲ ▼: its place in the legend, the tables, the stacks and bars."""
         exp = self.win.exp
-        box = QGroupBox("Series, in order")
-        box.setToolTip("each label, in every panel; labels shown under one name (▤) are one "
-                       "series; ▲ ▼: its place in the legend, the tables, the stacks and bars")
-        f = QFormLayout(box)
+        f.parentWidget().setToolTip("each label, in every panel; labels shown under one name "
+                                    "(▤) are one series; ▲ ▼: its place in the legend, the "
+                                    "tables, the stacks and bars")
         o = plots.options(exp)
         styles = plots.series_style(exp, o)
         custom = self.fig_dict().setdefault("series", {})
@@ -934,7 +1018,6 @@ class FigureTab(QWidget):
             w.setLayout(row)
             row.setContentsMargins(0, 0, 0, 0)
             f.addRow(exp.name("label", lab) + (" (control)" if st["ctrl"] else ""), w)
-        return box
 
     def _series_names(self) -> dict[str, str]:
         """{name: its first label}, in order: the series a figure can show."""
@@ -1011,11 +1094,36 @@ class FigureTab(QWidget):
 
     def remove(self):
         own = self._own_panels()
-        if not (0 <= self.sel < len(own)) or own[self.sel].get("kind") == "legend":
+        if not (0 <= self.sel < len(own)):
             return
+        if own[self.sel].get("kind") == "legend":
+            return self._legend_off()
         self._snap("remove")
         del own[self.sel]
         self.sel = min(self.sel, len(own) - 1)
+        self._changed()
+        self.refresh()
+
+    def _legend_off(self):
+        """The legend out of the figure (Del on it); + legend puts it back where it was."""
+        opts = self.fig_dict().setdefault("options", {})
+        cur = plots.options(self.win.exp)["legend"]
+        if cur == "none":
+            return
+        self._undo_point()
+        opts["legend"], opts["legend_was"] = "none", cur
+        self.sel = -1
+        self._changed()
+        self.refresh()
+
+    def _legend_on(self):
+        opts = self.fig_dict().setdefault("options", {})
+        if plots.options(self.win.exp)["legend"] != "none":
+            return
+        self._undo_point()
+        was = opts.pop("legend_was", "bottom")
+        opts["legend"] = was if was != "none" else "bottom"
+        self.sel = next(i for i, p in enumerate(self.panels()) if p.get("kind") == "legend")
         self._changed()
         self.refresh()
 

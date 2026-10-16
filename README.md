@@ -27,7 +27,8 @@ Self-contained instead: run **`Flowless.bat private`** the first time, and every
 removes it: the whole private folder, or only Flowless's part of the shared one.
 
 What Flowless remembers (negative controls, aliases, recorded procedures, the columns and
-options shown, typed values) is in `flowless_options.json` beside `Flowless.bat`.
+options shown, typed values) is in `flowless_options.json` beside `Flowless.bat`; an internal
+error's details, in `flowless_errors.log` there (send it along with a problem report).
 
 ## Use
 
@@ -61,7 +62,9 @@ Each tab in detail, the figure's layout, the files read and how the numbers are 
 uv run python -m flowless                           # launch
 uv run python -m flowless.model --self-check        # gates and values against the references
 uv run python -m flowless.record                    # reagent names read
+uv run python -m flowless.scale                     # log / logicle axes
 uv run python misc/smoke_test.py [--shots DIR]      # the whole window, driven without a screen
+uv run python misc/make_artificial.py [OUT]         # an artificial experiment (../data/artificial)
 uv run python -m flowless.fcs FILE.fcs              # a file's keywords and channels
 uv run python -m flowless.imports.sheet SHEET.xlsx  # what a procedure sheet gives
 uv run python -m flowless.imports.gatingml F.xml    # the gates a Gating-ML file gives
@@ -71,11 +74,14 @@ uv run python misc/make_icon.py                     # redraw the icon (needs Pil
 
 The checks read example runs (FCS files, FlowJo workspaces, procedure sheets) that are not in
 this repository: by default from `../data/data` beside the folder, or a folder given at the end
-of the command.
+of the command. The artificial experiment (compensated values for logicle axes, a viability
+dye, replicate runs; its truth in `TRUTH.txt`) is made by `misc/make_artificial.py`; the smoke
+test makes its own.
 
 Layers: `fcs.py` the FCS reader · `model.py` the experiment, gates, statistics (no Qt) ·
-`record.py` the experiment's record, reagents, MIFlowCyt · `imports/` other programs' files,
-best effort (`gatingml.py`, `flowjo.py`, `sheet.py`) · `plots.py` the figures, matplotlib only ·
+`scale.py` the axes' scales (linear, log, logicle) · `record.py` the experiment's record,
+reagents, MIFlowCyt · `imports/` other programs' files, best effort (`gatingml.py`,
+`flowjo.py`, `sheet.py`…) · `plots.py` the figures, matplotlib only ·
 `report.py` HTML, PDF, Excel, PowerPoint · `app.py` the window and its dialogs, `gating.py`,
 `figtab.py`, `canvas.py` the Gating and Figure tabs. matplotlib is imported in a thread once the
 window is up, to keep it off the startup path.

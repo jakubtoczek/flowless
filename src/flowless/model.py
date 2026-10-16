@@ -24,9 +24,11 @@ from pathlib import Path
 
 import numpy as np
 
-from . import __version__, fcs, record
+from . import __version__, fcs, record, scale
 
 ROLES = ["sample", "negative control", "secondary only", "unstained"]
+SCATTER = ("FSC", "SSC", "TIME", "WIDTH")       # linear on a dot plot
+VIABILITY = re.compile(r"viab|live|dead|zombie|7-?aad|draq ?7|sytox|\bPI\b|dapi", re.I)
 CONTROL_ORDER = ["negative control", "secondary only", "unstained"]   # the "÷ control" one
 STATS = {"geometric mean": "gmean", "median": "median", "mean": "mean"}
 ALL = "All events"
@@ -39,10 +41,15 @@ _cache: dict[str, fcs.FCS] = {}
 
 
 def load(path) -> fcs.FCS:
-    key = str(Path(path).resolve())
-    if key not in _cache:
-        _cache[key] = fcs.read(key)
-    return _cache[key]
+    """The file's events, read once. Looked up by the path as given first: resolving it
+    asks the disk (Sample.fcs runs this hundreds of times a figure)."""
+    given = str(path)
+    f = _cache.get(given)
+    if f is None:
+        key = str(Path(path).resolve())
+        f = _cache.get(key) or fcs.read(key)
+        _cache[key] = _cache[given] = f
+    return f
 
 
 @dataclass
@@ -55,6 +62,8 @@ class Gate:
     vertices: list = field(default_factory=list)
     lo: float | None = None
     hi: float | None = None
+    xs: str = ""                         # a polygon's sides are straight on these scales:
+    ys: str = ""                         # "" linear, "log", "logicle 0.65" (its plot's)
 
     def mask(self, f: fcs.FCS, base: np.ndarray) -> np.ndarray:
         if self.x not in f.data or (self.kind == "polygon" and self.y not in f.data):
@@ -72,13 +81,20 @@ class Gate:
         from matplotlib.path import Path as Poly
 
         v = np.asarray(self.vertices, float)
-        pts = np.column_stack([_piled(x, f.range(self.x), v[:, 0]),
-                               _piled(f.data[self.y], f.range(self.y), v[:, 1])])
-        return base & Poly(v).contains_points(pts)
+        cols = []
+        for k, (ch, sc) in enumerate(((self.x, self.xs), (self.y, self.ys))):
+            top = f.range(ch)
+            a = _piled(f.data[ch][base], top, v[:, k])
+            cols.append(scale.events(sc, a, top) if sc else a)
+            if sc:
+                v[:, k] = scale.forward(sc, v[:, k], top)
+        out = np.zeros(f.n, bool)                # only the parent's events are tested
+        out[base] = Poly(v).contains_points(np.column_stack(cols))
+        return out
 
     def key(self) -> tuple:
         return (self.name, self.parent, self.kind, self.x, self.y,
-                tuple(map(tuple, self.vertices)), self.lo, self.hi)
+                tuple(map(tuple, self.vertices)), self.lo, self.hi, self.xs, self.ys)
 
 
 def _piled(a: np.ndarray, top: float, verts: np.ndarray) -> np.ndarray:
@@ -245,8 +261,35 @@ class Experiment:
         return [c for c in allc if c in keep]
 
     def default_marker(self) -> str:
-        fl = self.fluorescence()
-        return fl[0] if fl else (self.all_channels() or [""])[0]
+        dye = self.viability_channel()
+        return next((c for c in self.fluorescence() + self.all_channels() if c != dye), "")
+
+    def scale(self, ch: str, dot: bool = False) -> str:
+        """The axis of *ch*: log ('' for linear: a dot plot's scatter channels), logicle
+        where a file holds values below 0 (compensated data), its width from the most
+        negative ones ('logicle 0.65')."""
+        if dot and ch.upper().startswith(SCATTER):
+            return ""
+        neg = [s.fcs.negative[ch] for s in self.samples if ch in s.fcs.negative]
+        if not neg:
+            return "log"
+        top = next(s.fcs.range(ch) for s in self.samples if ch in s.fcs.data) or 262144.0
+        return scale.logicle(top, min(neg))
+
+    def viability_channel(self) -> str:
+        """The channel a viability dye is read on: a recorded one's (a reagent of kind
+        'viability dye'), else a channel named for one ($PnS 'DRAQ7-A', 'Live/Dead'…);
+        '' without: nothing about viability is shown then."""
+        if not self.samples:
+            return ""
+        f = self.samples[0].fcs
+        dyes = {fcs.fluor_of(r.get("fluorochrome") or fcs.find_fluor(r.get("name", "")))
+                for r in self.record.get("reagents", []) if r.get("kind") == "viability dye"}
+        for c, lab in zip(f.channels, f.labels):
+            if c.endswith("-A") and _is_fluo(c, lab) and (
+                    fcs.fluor_of(lab or c) in dyes - {""} or VIABILITY.search(lab)):
+                return c
+        return ""
 
     # -- gating
     def tree(self, s: Sample) -> list[Gate]:
@@ -360,7 +403,8 @@ class Experiment:
     def gates_from(self) -> dict:
         """The file the gates came from or went to, while they are still as there."""
         f = self.gates_file
-        return f if f.get("key") == self.gates_key() and Path(f.get("path", "")).is_file()             else {}
+        ok = f.get("key") == self.gates_key() and Path(f.get("path", "")).is_file()
+        return f if ok else {}
 
     # -- file
     def to_dict(self) -> dict:
@@ -438,8 +482,7 @@ def _gate(d) -> Gate:
 
 
 def _is_fluo(ch: str, label: str) -> bool:
-    return not ch.upper().startswith(("FSC", "SSC", "TIME", "WIDTH")) and \
-        not label.upper().startswith(("FSC", "SSC"))
+    return not ch.upper().startswith(SCATTER) and not label.upper().startswith(("FSC", "SSC"))
 
 
 AUTO = "cells (auto)"
@@ -470,17 +513,22 @@ def stats(v: np.ndarray) -> dict:
             "cv": float(100 * v.std(ddof=1) / mean) if n > 1 and mean else None}
 
 
-def histogram(v: np.ndarray, top: float, bins: int = 256, smooth: bool = True):
+def histogram(v: np.ndarray, top: float, bins: int = 256, smooth: bool = True,
+              kind: str = "log"):
     """Counts per channel on a log scale from 1 to *top* (256 channels, as FlowJo's
-    'Count' axis). Returns (bin centres, counts)."""
-    hi = math.log10(top) if top > 1 else 7.0
-    lv = np.log10(v[v > 0]) if v.size else np.empty(0)
-    h, e = np.histogram(lv, bins=bins, range=(0, hi))
+    'Count' axis), or a logicle one (*kind*: values below 0 too). Returns (bin centres,
+    counts)."""
+    if kind.startswith("logicle"):
+        h, e = np.histogram(scale.forward(kind, v, top), bins=bins, range=(0, scale.M))
+    else:
+        hi = math.log10(top) if top > 1 else 7.0
+        h, e = np.histogram(np.log10(v[v > 0]) if v.size else np.empty(0), bins=bins,
+                            range=(0, hi))
     h = h.astype(float)
     if smooth and h.sum():
         k = np.exp(-0.5 * (np.arange(-6, 7) / 2.0) ** 2)
         h = np.convolve(h, k / k.sum(), mode="same")
-    return 10 ** ((e[:-1] + e[1:]) / 2), h
+    return scale.inverse(kind, (e[:-1] + e[1:]) / 2, top), h
 
 
 def saturated(s: Sample) -> dict[str, float]:
@@ -607,6 +655,46 @@ def singlets_gate(samples: list[Sample], masks: list, x: str = "FSC-A",
     pts = np.column_stack([np.minimum(A, top - 1), H])
     pct = 100 * float(Poly(np.asarray(v)).contains_points(pts).mean())
     return [[float(p), float(q)] for p, q in v], pct
+
+
+LIVE = "live (auto)"
+
+
+def live_gate(samples: list[Sample], masks: list, x: str, kind: str,
+              y: str = "SSC-A") -> tuple[list, float]:
+    """A rectangle on the viability dye (*x*, on its *kind* of axis) × *y* around the live
+    cells: the dye's dim events, up to the dip before the bright (dead) ones - the lowest
+    point of the smoothed histogram between its main peak and a second peak (≥ 3 % of it);
+    with no second peak (all alive) 2.5 half-widths above the main peak. *masks*: each
+    sample's parent population. Returns (vertices, % of the events in); ([], 0) without
+    events."""
+    v, ry, top = [], 0.0, 0.0
+    for s, m in zip(samples, masks):
+        f = s.fcs
+        if x in f.data and y in f.data:
+            v.append(f.data[x][m])
+            ry, top = max(ry, f.range(y) or float(f.data[y].max())), max(top, f.range(x))
+    v = np.concatenate(v) if v else np.empty(0)
+    if v.size < 50:
+        return [], 0.0
+    top = top or float(v.max())
+    d = scale.events(kind, v, top)
+    span = scale.span(kind, top)
+    h, e = np.histogram(d[d > 0], bins=256, range=(0, span))   # not the pile on the edge
+    k = np.exp(-0.5 * (np.arange(-6, 7) / 2.0) ** 2)
+    h = np.convolve(h.astype(float), k / k.sum(), mode="same")
+    p = int(np.argmax(h))
+    half = p + int(np.argmax(h[p:] < 0.5 * h[p]))
+    q = half + int(np.argmax(h[half:])) if half < len(h) else half
+    if q > half + 3 and h[q] >= 0.03 * h[p] and h[half:q].min() < 0.7 * h[q]:
+        cut = half + int(np.argmin(h[half:q + 1]))
+    else:
+        cut = min(len(h) - 1, int(p + 2.5 * max(half - p, 2)))
+    t = float(e[cut])
+    xs = float(scale.inverse(kind, -0.02 * span, top)), float(scale.inverse(kind, t, top))
+    y0 = -0.005 * ry
+    pct = 100 * float((d < t).mean())
+    return [[xs[0], y0], [xs[1], y0], [xs[1], ry], [xs[0], ry]], pct
 
 
 def _split_level(h: np.ndarray, main: int, floor: float) -> float:
@@ -815,6 +903,29 @@ def self_check(data: Path) -> int:
     inside = Poly(np.array(v)).contains_points(np.column_stack([A, H]))
     assert inside[:12000].mean() > 0.97 and inside[12000:].mean() < 0.05, \
         (inside[:12000].mean(), inside[12000:].mean())
+    # viability: compensated data (values below 0: logicle), the dye's dim live cells in,
+    # the bright dead ones out; nothing about it without a dye
+    live = rng.normal(150, 120, 9000)
+    dead = 10 ** rng.normal(4.3, 0.25, 1500)
+    dye = np.concatenate([live, dead]).astype(np.float32)
+    ssc = rng.uniform(1e4, 2e5, dye.size).astype(np.float32)
+    f = fcs.FCS(Path("v.fcs"), {"$P1R": "262144", "$P2R": "262144"}, ["FL4-A", "SSC-A"],
+                ["DRAQ7-A", "SSC-A"], {"FL4-A": dye, "SSC-A": ssc})
+    _cache[str(Path("v.fcs").resolve())] = f
+    e4 = Experiment(samples=[Sample("v.fcs")])
+    assert e4.viability_channel() == "FL4-A" and e4.scale("FL4-A").startswith("logicle")
+    assert e4.scale("SSC-A", dot=True) == "" and e4.default_marker() == "SSC-A"
+    lc = e4.scale("FL4-A")
+    v, pct = live_gate(e4.samples, [np.ones(dye.size, bool)], "FL4-A", lc)
+    m = Gate(LIVE, "", "polygon", "FL4-A", "SSC-A", v, xs=lc).mask(f, np.ones(dye.size, bool))
+    assert m[:9000].mean() > 0.97 and m[9000:].mean() < 0.03, (m[:9000].mean(), m[9000:].mean())
+    assert 80 < pct < 90, pct
+    tri = [[1e2, 1e4], [1e5, 1e4], [1e5, 1.9e5]]          # straight on logicle, not in values
+    g_lin, g_lc = Gate("t", "", "polygon", "FL4-A", "SSC-A", tri), \
+        Gate("t", "", "polygon", "FL4-A", "SSC-A", tri, xs="logicle")
+    one = np.ones(dye.size, bool)
+    assert g_lin.mask(f, one).sum() != g_lc.mask(f, one).sum()
+    assert not Experiment().viability_channel()
     # two runs of one cell line: their folders' names differ by a space or a dash
     e3 = Experiment(samples=[Sample("a.fcs", group="MDA-MB-157 parental cells"),
                              Sample("b.fcs", group="MDA-MB-157-parental cells"),

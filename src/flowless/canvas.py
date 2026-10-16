@@ -91,11 +91,12 @@ class FigureView(QGraphicsView):
     def set_figure(self, fig) -> None:
         buf = io.BytesIO()
         fig.savefig(buf, format="svg", facecolor=fig.get_facecolor(), edgecolor="none")
+        if self._item is not None:        # the old item first: it points at the old renderer,
+            self._scene.removeItem(self._item)    # which goes once replaced (a crash else)
+            self._item = None
         self._renderer = QSvgRenderer(QByteArray(buf.getvalue()))
         s = self._renderer.defaultSize()
         w, h = float(s.width()), float(s.height())
-        if self._item is not None:
-            self._scene.removeItem(self._item)
         self._item = QGraphicsSvgItem()
         self._item.setSharedRenderer(self._renderer)
         self._item.setCacheMode(QGraphicsItem.NoCache)

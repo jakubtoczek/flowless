@@ -10,9 +10,12 @@ the rest it can.
 from __future__ import annotations
 
 import copy
+import datetime
 import html
 import json
+import sys
 import threading
+import traceback
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QEventLoop, QLocale, QMarginsF, QMimeData, QObject, Qt, QTimer, QUrl
@@ -240,7 +243,9 @@ class SamplesTab(QWidget):
         self.table.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed
                                    | QAbstractItemView.AnyKeyPressed)
         self.table.itemChanged.connect(self._edited)
-        self.table.itemSelectionChanged.connect(self._quick)
+        # the quick view once the selection settles: arrows held down draw once, not a row each
+        self.quick_timer = QTimer(singleShot=True, interval=60, timeout=self._quick)
+        self.table.itemSelectionChanged.connect(self.quick_timer.start)
         self.table.cellClicked.connect(self._clicked)
         self._roles = _Combo(model.ROLES, self.table)
         self._plain = QStyledItemDelegate(self.table)
@@ -364,7 +369,7 @@ class SamplesTab(QWidget):
         if "plot" in cols:
             t.setColumnWidth(cols.index("plot"), 36)
         t.blockSignals(False)
-        self._quick()
+        self.quick_timer.start()
 
     def _edited(self, it: QTableWidgetItem):
         exp, col = self.win.exp, self.shown()[it.column()]
@@ -505,8 +510,8 @@ class SamplesTab(QWidget):
         tree = exp.tree(s)
         first = next((g for g in tree if not g.parent and g.kind == "polygon"), None)
         x, y = (first.x, first.y) if first else ("FSC-A", "SSC-A")
-        o = {**plots.options(exp), "title_pt": 8.5, "label_pt": 8, "xtick_pt": 7, "ytick_pt": 7,
-             "gate_pt": 7, "legend": "none"}
+        o = {**plots.options(exp), **plots.ALL_TEXT, "title_pt": 8.5, "label_pt": 8,
+             "xtick_pt": 7, "ytick_pt": 7, "gate_pt": 7, "legend": "none"}
         dot, hist = self.canvases
         a1, a2 = dot.figure.axes[0], hist.figure.axes[0]
         drawn = [g for g in tree if not g.parent and g.kind == "polygon" and (g.x, g.y) == (x, y)]
@@ -850,8 +855,9 @@ class RecordTab(QScrollArea):
     def _checklist(self):
         exp = self.win.exp
         items = record.miflowcyt(self.rec(), exp.samples, exp.gates)
-        self.check.setText("<br>".join(f"{'✓' if ok else '<span style=\"color:#e66767\">✗</span>'}"
-                                       f" {i} <span style='color:#8d8d8d'>— {w}</span>"
+        miss = '<span style="color:#e66767">✗</span>'
+        self.check.setText("<br>".join(f"{'✓' if ok else miss} {i} "
+                                       f"<span style='color:#8d8d8d'>— {w}</span>"
                                        for i, ok, w in items))
 
     def _general(self, k, val):
@@ -990,14 +996,14 @@ class AliasDialog(QDialog):
                 rows.append((kind, n, own, exp.aliases.get(kind, {}).get(n, "")))
         self.rows = rows
         self.kind = QComboBox()
-        self.kind.addItem("everything", "")
         for k in model.ALIAS_KINDS:
             self.kind.addItem(self.KIND_NAMES[k], k)
+        self.kind.addItem("everything", "")
         self.kind.currentIndexChanged.connect(lambda _: self._filter())
         t = self.table = QTableWidget(len(rows), 3)
         t.setHorizontalHeaderLabels(["", "name", "shown as"])
         t.verticalHeader().hide()
-        for r, (kind, n, own, alias) in enumerate(rows):
+        for r, (kind, _, own, alias) in enumerate(rows):
             t.setItem(r, 0, _item(self.KIND_NAMES[kind], False))
             t.setItem(r, 1, _item(own, False))
             a = _item(alias)
@@ -1020,6 +1026,7 @@ class AliasDialog(QDialog):
         v.addWidget(t, 1)
         v.addWidget(self.remember)
         v.addWidget(bb)
+        self._filter()                            # the groups at first
 
     def _copy(self):
         it = self.table.currentItem()
@@ -1166,8 +1173,8 @@ class OptionsDialog(QDialog):
                   [o["key"] for o in plots.OPTIONS if o["shown"]])
         boxes = {}
         for o in plots.OPTIONS:
-            if o["bar"] or o["key"] in plots.LEGEND_KEYS[2:]:   # always there: the layout's
-                continue                                        # bar, the legend's box
+            if o["bar"] or o["paired"] or o["key"] in plots.LEGEND_KEYS[2:]:   # elsewhere:
+                continue                         # the layout's bar, a row's ticks, the legend
             if o["section"] not in boxes:
                 boxes[o["section"]] = QVBoxLayout(box := QGroupBox(o["section"]))
                 v.addWidget(box)
@@ -1197,6 +1204,7 @@ class ReportDialog(QDialog):
         self.setWindowTitle("Report")
         self.resize(1200, 820)
         self.timer = QTimer(singleShot=True, interval=250, timeout=self.refresh)
+        self.images = {}                          # drawn once while open (report.build)
         self.fmt = QComboBox()
         for ext, label in self.FORMATS:
             self.fmt.addItem(label, ext)
@@ -1287,13 +1295,13 @@ class ReportDialog(QDialog):
         try:
             exp, secs = self.win.exp, self.sections()
             if self.ext == ".pptx":
-                text, images, notes = report.pptx_parts(exp, secs)
+                text, images, notes = report.pptx_parts(exp, secs, cache=self.images)
                 text = text.replace("</body>", "<h2>Notes (below the slide)</h2><pre "
                                     "style='white-space: pre-wrap; font-size: 8.5pt'>"
                                     f"{html.escape(notes)}</pre></body>")
             else:
                 text, images = report.build(exp, secs, self.full.isChecked() and
-                                            self.ext in (".pdf", ".html"))
+                                            self.ext in (".pdf", ".html"), self.images)
             y = self.view.verticalScrollBar().value()
             self.view.setDocument(html_document(text, images, self.view))
             self.view.verticalScrollBar().setValue(y)
@@ -1310,7 +1318,7 @@ class ReportDialog(QDialog):
         elif ext == ".pptx":
             report.save_pptx(exp, p, secs)
         else:
-            text, images = report.build(exp, secs, self.full.isChecked())
+            text, images = report.build(exp, secs, self.full.isChecked(), self.images)
             if ext == ".html":
                 report.save_html(text, images, p)
             else:
@@ -1365,6 +1373,7 @@ class MainWindow(QMainWindow):
         QLocale.setDefault(QLocale.c())     # 1.5, not the system's 1,5: as published; before
         super().__init__()                  # the window, or it and its children keep the old
         self.opts = load_options()
+        sys.excepthook = self._error              # a click's exception: in the log, not lost
         self.exp = model.Experiment(record=record.empty())
         self.undo, self.redo = [], []
         self.dirty = False
@@ -1484,6 +1493,23 @@ class MainWindow(QMainWindow):
             self._pages[4]._proc_edit()
 
     # -- bookkeeping
+    def _error(self, kind, err, tb):
+        """Something broke in Flowless: the log says what and where (under pythonw nothing
+        else would), the traceback goes to flowless_errors.log beside the options."""
+        text = "".join(traceback.format_exception(kind, err, tb))
+        if sys.stderr:                            # a console (python, not pythonw)
+            sys.stderr.write(text)
+        try:
+            with OPTIONS.with_name("flowless_errors.log").open("a", encoding="utf-8") as fh:
+                fh.write(f"--- {datetime.datetime.now():%Y-%m-%d %H:%M:%S} Flowless "
+                         f"{__version__}\n{text}")
+        except OSError:
+            pass
+        at = traceback.extract_tb(tb)[-1] if tb else None
+        self.log(f"✗ internal error — {kind.__name__}: {err}"
+                 + (f" ({Path(at.filename).name}:{at.lineno})" if at else "")
+                 + " — what was being done may be incomplete; details in flowless_errors.log")
+
     def log(self, *lines):
         for line in lines:
             self.logbox.appendPlainText(line)
@@ -1645,6 +1671,8 @@ class MainWindow(QMainWindow):
                 self.import_gates(p, k)
             elif k == "sheet":
                 self.import_procedure(p)
+            elif k == "accuri":
+                self.import_accuri(p)
             elif not k:
                 self.log(f"✗ {p.name}: not a file Flowless reads")
 
@@ -1712,6 +1740,32 @@ class MainWindow(QMainWindow):
         self.exp.gates_file = {"path": str(Path(p).resolve()), "how": "imported",
                                "key": self.exp.gates_key()}
         self.changed()
+
+    def import_accuri(self, p):
+        """An Accuri workspace: its wells as FCS files beside it (once), added; its
+        polygons as their groups' gates. Wells already in (the same events) are skipped."""
+        from .imports import accuri
+
+        try:
+            files = accuri.extract(p)
+        except Exception as e:
+            self.log(f"✗ {p.name}: {e}")
+            return
+        have = {s.ident for s in self.exp.samples}
+        new = [f for f in files if model._ident(model.load(f)) not in have]
+        if len(new) < len(files):
+            self.log(f"  {p.name}: {len(files) - len(new)} wells already in (the same events)")
+        if not new:
+            return
+        before = {s.path for s in self.exp.samples}
+        self.add_files(new)
+        added = [s for s in self.exp.samples if s.path not in before]
+        if added:
+            self.log(f"Workspace {p.name} (wells written to {Path(new[0]).parent}):",
+                     *accuri.apply(self.exp, p, added))
+            self.exp.gates_file = {"path": str(Path(p).resolve()), "how": "imported",
+                                   "key": self.exp.gates_key()}
+            self.changed()
 
     def import_procedure(self, p):
         from .imports import sheet
