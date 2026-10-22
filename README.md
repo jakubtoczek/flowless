@@ -56,14 +56,6 @@ called — two labels under one name are one series, two groups under one name a
 Each tab in detail, the figure's layout, the files read and how the numbers are made:
 **[the user guide](GUIDE.md)**.
 
-## Files
-
-- **Reads** FCS 2.0 / 3.0 / 3.1 list-mode files; best effort, other programs' files: FlowJo
-  workspaces, Gating-ML, procedure sheets (GUIDE.md › Files Flowless reads).
-- **Writes** the experiment (`.json`: the samples by paths relative to it, gates, the record,
-  the figure), reports (PDF, HTML, Excel, PowerPoint) and figures. The FCS files are never
-  changed.
-
 ## Development
 
 ```
