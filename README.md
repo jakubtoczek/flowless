@@ -56,6 +56,10 @@ called — two labels under one name are one series, two groups under one name a
 Each tab in detail, the figure's layout, the files read and how the numbers are made:
 **[the user guide](GUIDE.md)**.
 
+On Windows, an experiment (`.json`) also opens from Explorer: right-click › **Open with** ›
+Flowless — offered once Flowless has run, never made the default; `uninstall.bat` takes it off the
+list.
+
 ## Development
 
 ```

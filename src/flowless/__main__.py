@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from . import winshell
+from . import openwith, winshell
 
 _PKG = Path(__file__).resolve().parent  # this package's folder
 _crashes = None                         # flowless_errors.log, for faulthandler
@@ -85,6 +85,8 @@ def main() -> int:
 
     winshell.taskbar_identity("Flowless", "Flowless", _PKG.parents[1] / "Flowless.bat",
                               _PKG / "assets" / "flowless.ico")  # before any window
+    openwith.register("Flowless.json", "Flowless", "flowless", _PKG.parent,
+                      _PKG / "assets" / "flowless.ico")  # in Open with for .json
     app = QApplication(sys.argv)
     splash = _splash()
     app.processEvents()
