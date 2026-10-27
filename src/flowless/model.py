@@ -24,7 +24,9 @@ from pathlib import Path
 
 import numpy as np
 
-from . import __version__, fcs, record, scale
+from . import __version__, fcs, jsonfile, record, scale
+
+FORMAT, FORMAT_VERSION = "flowless-experiment", 2   # FORMATS.md; 1: "flowless": <version>
 
 ROLES = ["sample", "negative control", "secondary only", "unstained"]
 SCATTER = ("FSC", "SSC", "TIME", "WIDTH")       # linear on a dot plot
@@ -140,6 +142,7 @@ class Experiment:
     path: str = ""                                                # where it was saved
     gates_file: dict = field(default_factory=dict)    # {path, how, key}: the gates' file
     label_order: list = field(default_factory=list)   # the series as the user ordered them
+    id: str = ""                                       # given at the first save, kept
 
     # -- groups and samples
     def groups(self) -> list[str]:
@@ -418,7 +421,7 @@ class Experiment:
                 except ValueError:                        # another drive
                     d["rel"] = ""
             samples.append(d)
-        return {"flowless": __version__, "marker": self.marker, "stat": self.stat,
+        return {"id": self.id, "marker": self.marker, "stat": self.stat,
                 "samples": samples,
                 "gates": {g: [asdict(x) for x in gs] for g, gs in self.gates.items()},
                 "record": self.record, "figure": self.figure, "aliases": self.aliases,
@@ -427,8 +430,9 @@ class Experiment:
 
     def save(self, path) -> None:
         self.path = str(Path(path).resolve())
-        Path(path).write_text(json.dumps(self.to_dict(), indent=1, ensure_ascii=False),
-                              encoding="utf-8")
+        self.id = self.id or jsonfile.new_id()
+        jsonfile.write(path, self.to_dict(), FORMAT, FORMAT_VERSION, f"Flowless {__version__}",
+                       self.id)                   # whole or not at all
 
     @classmethod
     def from_dict(cls, d: dict, path: str = "") -> tuple["Experiment", list[str]]:
@@ -436,7 +440,8 @@ class Experiment:
         e = cls(marker=d.get("marker", ""), stat=d.get("stat", "geometric mean"),
                 record=d.get("record", {}), figure=d.get("figure", {}),
                 aliases=d.get("aliases", {}), channels=d.get("channels", []), path=path,
-                gates_file=d.get("gates_file", {}), label_order=d.get("label_order", []))
+                gates_file=d.get("gates_file", {}), label_order=d.get("label_order", []),
+                id=d.get("id", ""))
         base = Path(path).parent if path else None
         problems = []
         for sd in d.get("samples", []):
@@ -466,9 +471,13 @@ class Experiment:
 
     @classmethod
     def open(cls, path) -> tuple["Experiment", list[str]]:
-        d = json.loads(Path(path).read_text(encoding="utf-8"))
-        if "flowless" not in d and "quickflow" not in d:     # quickflow: its first name
-            raise ValueError(f"{Path(path).name}: not a Flowless experiment")
+        d = jsonfile.read(path)
+        try:                                 # quickflow: its first name
+            jsonfile.version_of(d, FORMAT, FORMAT_VERSION,
+                                lambda d: 1 if "flowless" in d or "quickflow" in d else None)
+        except jsonfile.FormatError as e:
+            raise ValueError(f"{Path(path).name}: "
+                             + (str(e) if "newer" in str(e) else "not a Flowless experiment"))
         return cls.from_dict(d, str(Path(path).resolve()))
 
 
@@ -934,6 +943,27 @@ def self_check(data: Path) -> int:
     e3.aliases = {"group": {"MDA-MB-157-parental cells": "MDA-MB-157 parental cells"}}
     assert e3.pool("MDA-MB-157 parental cells") == ["MDA-MB-157 parental cells",
                                                     "MDA-MB-157-parental cells"]
+    # the file (FORMATS.md): its header first, written whole; its id kept by every save; a
+    # version-1 file opens; a newer one, or another app's, is refused
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp) / "e.json"
+        Experiment(marker="FL2-A").save(p)
+        d = jsonfile.read(p)
+        assert list(d)[:3] == ["format", "format_version", "id"] and "flowless" not in d, list(d)
+        e5, _ = Experiment.open(p)
+        e5.save(p)
+        assert jsonfile.read(p)["id"] == d["id"] and e5.marker == "FL2-A"
+        assert not Path(tmp, "e.json.part").exists()
+        p.write_text(json.dumps({"flowless": "2026.10.16", "marker": "FL1-A"}), encoding="utf-8")
+        assert Experiment.open(p)[0].marker == "FL1-A", "version 1"
+        for bad, why in (({**d, "format_version": 3}, "newer"), ({"x": 1}, "not a Flowless")):
+            p.write_text(json.dumps(bad), encoding="utf-8")
+            try:
+                Experiment.open(p)
+                raise AssertionError(bad)
+            except ValueError as ex:
+                assert why in str(ex), ex
     print("model self-check", "OK" if ok else "FAILED")
     return 0 if ok else 1
 

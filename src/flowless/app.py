@@ -31,11 +31,12 @@ from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QAbstract
                                QTableWidgetItem, QTabWidget, QTextBrowser, QToolButton,
                                QVBoxLayout, QWidget)
 
-from . import __version__, fcs, imports, model, record
+from . import __version__, fcs, imports, jsonfile, model, record
 
 APP_NAME = "Flowless"
 _PKG = Path(__file__).resolve().parent
 OPTIONS = _PKG.parents[1] / "flowless_options.json"     # beside Flowless.bat
+OPTIONS_FORMAT = "flowless-options"                     # FORMATS.md
 if not OPTIONS.exists() and OPTIONS.with_name("quickflow_options.json").exists():
     OPTIONS.with_name("quickflow_options.json").rename(OPTIONS)   # its first name's
 SAMPLE_COLUMNS = ["⤢", "plot", "group", "label", "role", "condition", "file", "well",
@@ -99,8 +100,7 @@ def app_icon():
 
 def load_options() -> dict:
     try:
-        d = json.loads(OPTIONS.read_text(encoding="utf-8"))
-        d = d if isinstance(d, dict) else {}
+        d = jsonfile.body(jsonfile.read(OPTIONS))      # a newer one: as far as understood
         if "tick_pt" in (d.get("figure_options") or []):     # one tick size before x / y
             d["figure_options"] += ["xtick_pt", "ytick_pt"]
         return {**copy.deepcopy(DEFAULT_OPTIONS), **d}
@@ -1516,8 +1516,7 @@ class MainWindow(QMainWindow):
 
     def save_options(self):
         try:
-            OPTIONS.write_text(json.dumps(self.opts, indent=1, ensure_ascii=False),
-                               encoding="utf-8")
+            jsonfile.write(OPTIONS, self.opts, OPTIONS_FORMAT, 2, f"Flowless {__version__}")
         except OSError as e:
             self.log(f"⚠ options not saved: {e}")
 
